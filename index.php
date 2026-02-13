@@ -1,3 +1,4 @@
+<?php require_once 'config.php'; ?>
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -10,7 +11,7 @@
     <link rel="stylesheet" href="style.css">
     <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📁</text></svg>">
     <!-- mammoth.js for DOCX preview -->
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/mammoth/1.8.0/mammoth.browser.min.js" defer></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/mammoth/1.8.0/mammoth.browser.min.js" crossorigin="anonymous" defer></script>
 </head>
 <body>
     <div class="app-container">
@@ -71,9 +72,9 @@
                 <!-- Column Headers -->
                 <div class="file-list-header">
                     <span></span>
-                    <span>Name</span>
-                    <span style="text-align:right">Size</span>
-                    <span class="col-date" style="text-align:right">Modified</span>
+                    <span class="sortable" onclick="App.toggleSort('name')">Name <span id="sortIndicatorName"></span></span>
+                    <span class="sortable" style="text-align:right" onclick="App.toggleSort('size')">Size <span id="sortIndicatorSize"></span></span>
+                    <span class="sortable col-date" style="text-align:right" onclick="App.toggleSort('date')">Modified <span id="sortIndicatorDate"></span></span>
                     <span></span>
                 </div>
                 <div class="file-grid" id="fileGrid"></div>
@@ -130,6 +131,13 @@
     <!-- Toast -->
     <div class="toast-container" id="toastContainer"></div>
 
+    <script>
+        window.PYRA_CONFIG = {
+            supabaseUrl: '<?= defined("SUPABASE_URL") ? SUPABASE_URL : "" ?>',
+            bucket: '<?= defined("SUPABASE_BUCKET") ? SUPABASE_BUCKET : "" ?>',
+            maxUploadSize: <?= defined("MAX_UPLOAD_SIZE") ? MAX_UPLOAD_SIZE : 524288000 ?>
+        };
+    </script>
     <script src="app.js"></script>
 </body>
 </html>

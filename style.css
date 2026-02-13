@@ -361,6 +361,25 @@ body {
     z-index: 10;
 }
 
+.file-list-header .sortable {
+    cursor: pointer;
+    user-select: none;
+    transition: color var(--transition);
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+}
+
+.file-list-header .sortable:hover {
+    color: var(--text-primary);
+}
+
+.file-list-header .sortable svg {
+    width: 12px;
+    height: 12px;
+    opacity: 0.7;
+}
+
 /* === File Grid === */
 .file-grid {
     display: flex;

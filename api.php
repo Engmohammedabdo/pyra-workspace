@@ -5,8 +5,23 @@
 require_once 'config.php';
 
 header('Content-Type: application/json; charset=utf-8');
+header('X-Content-Type-Options: nosniff');
+header('X-Frame-Options: SAMEORIGIN');
+header('Referrer-Policy: strict-origin-when-cross-origin');
 
-function supabaseRequest($method, $endpoint, $body = null, $isRaw = false) {
+function sanitizePath(string $path): string {
+    $path = str_replace("\0", '', $path);
+    $path = str_replace('\\', '/', $path);
+    $parts = explode('/', $path);
+    $safe = [];
+    foreach ($parts as $part) {
+        if ($part === '' || $part === '.' || $part === '..') continue;
+        $safe[] = $part;
+    }
+    return implode('/', $safe);
+}
+
+function supabaseRequest(string $method, string $endpoint, ?array $body = null, bool $isRaw = false): array {
     $url = SUPABASE_URL . '/storage/v1' . $endpoint;
 
     $ch = curl_init();
@@ -71,7 +86,7 @@ function supabaseRequest($method, $endpoint, $body = null, $isRaw = false) {
     return ['data' => json_decode($response, true), 'httpCode' => $httpCode, 'raw' => $response];
 }
 
-function listFiles($prefix = '') {
+function listFiles(string $prefix = ''): array {
     $body = [
         'prefix' => $prefix,
         'limit' => 1000,
@@ -113,7 +128,7 @@ function listFiles($prefix = '') {
     return ['success' => false, 'error' => $result['data']['message'] ?? 'Failed to list files'];
 }
 
-function uploadFile($prefix, $file) {
+function uploadFile(string $prefix, array $file): array {
     $filePath = $prefix ? $prefix . '/' . $file['name'] : $file['name'];
     $endpoint = '/object/' . SUPABASE_BUCKET . '/' . rawurlencode($filePath);
 
@@ -157,7 +172,7 @@ function uploadFile($prefix, $file) {
     return ['success' => false, 'error' => $data['message'] ?? 'Upload failed (HTTP ' . $httpCode . ')'];
 }
 
-function deleteFile($filePath) {
+function deleteFile(string $filePath): array {
     $encodedPath = implode('/', array_map('rawurlencode', explode('/', $filePath)));
     $url = SUPABASE_URL . '/storage/v1/object/' . SUPABASE_BUCKET . '/' . $encodedPath;
 
@@ -181,7 +196,7 @@ function deleteFile($filePath) {
     return ['success' => false, 'error' => $data['message'] ?? 'Delete failed'];
 }
 
-function renameFile($oldPath, $newPath) {
+function renameFile(string $oldPath, string $newPath): array {
     $body = [
         'bucketId' => SUPABASE_BUCKET,
         'sourceKey' => $oldPath,
@@ -197,7 +212,7 @@ function renameFile($oldPath, $newPath) {
     return ['success' => false, 'error' => $result['data']['message'] ?? 'Rename failed'];
 }
 
-function getFileContent($filePath) {
+function getFileContent(string $filePath): array {
     $encodedPath = implode('/', array_map('rawurlencode', explode('/', $filePath)));
     $url = SUPABASE_URL . '/storage/v1/object/' . SUPABASE_BUCKET . '/' . $encodedPath;
 
@@ -220,7 +235,7 @@ function getFileContent($filePath) {
     return ['success' => false, 'error' => 'Failed to get file content'];
 }
 
-function saveFileContent($filePath, $content, $mimeType = 'text/plain') {
+function saveFileContent(string $filePath, string $content, string $mimeType = 'text/plain'): array {
     $encodedPath = implode('/', array_map('rawurlencode', explode('/', $filePath)));
     $url = SUPABASE_URL . '/storage/v1/object/' . SUPABASE_BUCKET . '/' . $encodedPath;
 
@@ -249,7 +264,7 @@ function saveFileContent($filePath, $content, $mimeType = 'text/plain') {
     return ['success' => false, 'error' => $data['message'] ?? 'Save failed (HTTP ' . $httpCode . ')'];
 }
 
-function createFolder($prefix, $folderName) {
+function createFolder(string $prefix, string $folderName): array {
     $path = $prefix ? $prefix . '/' . $folderName . '/.keep' : $folderName . '/.keep';
     $url = SUPABASE_URL . '/storage/v1/object/' . SUPABASE_BUCKET . '/' . $path;
 
@@ -276,11 +291,11 @@ function createFolder($prefix, $folderName) {
     return ['success' => false, 'error' => $data['message'] ?? 'Create folder failed'];
 }
 
-function getPublicUrl($filePath) {
+function getPublicUrl(string $filePath): string {
     return SUPABASE_URL . '/storage/v1/object/public/' . SUPABASE_BUCKET . '/' . $filePath;
 }
 
-function getSignedUrl($filePath) {
+function getSignedUrl(string $filePath): string {
     $body = [
         'expiresIn' => 3600
     ];
@@ -297,7 +312,7 @@ $action = $_GET['action'] ?? $_POST['action'] ?? '';
 
 switch ($action) {
     case 'list':
-        $prefix = $_GET['prefix'] ?? '';
+        $prefix = sanitizePath($_GET['prefix'] ?? '');
         echo json_encode(listFiles($prefix));
         break;
 
@@ -306,7 +321,7 @@ switch ($action) {
             echo json_encode(['success' => false, 'error' => 'No file provided']);
             break;
         }
-        $prefix = $_POST['prefix'] ?? '';
+        $prefix = sanitizePath($_POST['prefix'] ?? '');
 
         // Handle multiple files
         if (is_array($_FILES['file']['name'])) {
@@ -327,7 +342,7 @@ switch ($action) {
         break;
 
     case 'delete':
-        $path = $_POST['path'] ?? '';
+        $path = sanitizePath($_POST['path'] ?? '');
         if (!$path) {
             echo json_encode(['success' => false, 'error' => 'No path provided']);
             break;
@@ -336,8 +351,8 @@ switch ($action) {
         break;
 
     case 'rename':
-        $oldPath = $_POST['oldPath'] ?? '';
-        $newPath = $_POST['newPath'] ?? '';
+        $oldPath = sanitizePath($_POST['oldPath'] ?? '');
+        $newPath = sanitizePath($_POST['newPath'] ?? '');
         if (!$oldPath || !$newPath) {
             echo json_encode(['success' => false, 'error' => 'Paths required']);
             break;
@@ -346,7 +361,7 @@ switch ($action) {
         break;
 
     case 'content':
-        $path = $_GET['path'] ?? '';
+        $path = sanitizePath($_GET['path'] ?? '');
         if (!$path) {
             echo json_encode(['success' => false, 'error' => 'No path provided']);
             break;
@@ -360,7 +375,7 @@ switch ($action) {
         break;
 
     case 'save':
-        $path = $_POST['path'] ?? '';
+        $path = sanitizePath($_POST['path'] ?? '');
         $content = $_POST['content'] ?? '';
         $mimeType = $_POST['mimeType'] ?? 'text/plain';
         if (!$path) {
@@ -371,8 +386,8 @@ switch ($action) {
         break;
 
     case 'createFolder':
-        $prefix = $_POST['prefix'] ?? '';
-        $folderName = $_POST['folderName'] ?? '';
+        $prefix = sanitizePath($_POST['prefix'] ?? '');
+        $folderName = sanitizePath($_POST['folderName'] ?? '');
         if (!$folderName) {
             echo json_encode(['success' => false, 'error' => 'Folder name required']);
             break;
@@ -382,7 +397,7 @@ switch ($action) {
 
     case 'proxy':
         // Proxy raw binary file (for DOCX preview with mammoth.js)
-        $path = $_GET['path'] ?? '';
+        $path = sanitizePath($_GET['path'] ?? '');
         if (!$path) {
             http_response_code(400);
             echo 'No path provided';
@@ -401,7 +416,7 @@ switch ($action) {
             header_remove('Content-Type');
             header('Content-Type: ' . $mime);
             header('Content-Length: ' . strlen($result['content']));
-            header('Access-Control-Allow-Origin: *');
+            // CORS restricted to same-origin requests
             echo $result['content'];
         } else {
             http_response_code(404);
@@ -410,7 +425,7 @@ switch ($action) {
         exit;
 
     case 'download':
-        $path = $_GET['path'] ?? '';
+        $path = sanitizePath($_GET['path'] ?? '');
         if (!$path) {
             http_response_code(400);
             echo 'No path provided';
@@ -419,9 +434,10 @@ switch ($action) {
         $result = getFileContent($path);
         if ($result['success']) {
             $filename = basename($path);
+            $safeName = preg_replace('/[^\w\-. ]/', '_', $filename);
             header_remove('Content-Type');
             header('Content-Type: application/octet-stream');
-            header('Content-Disposition: attachment; filename="' . $filename . '"');
+            header('Content-Disposition: attachment; filename="' . $safeName . '"; filename*=UTF-8\'\'' . rawurlencode($filename));
             header('Content-Length: ' . strlen($result['content']));
             echo $result['content'];
         } else {
@@ -431,8 +447,24 @@ switch ($action) {
         exit;
 
     case 'publicUrl':
-        $path = $_GET['path'] ?? '';
+        $path = sanitizePath($_GET['path'] ?? '');
         echo json_encode(['success' => true, 'url' => getPublicUrl($path)]);
+        break;
+
+    case 'deleteBatch':
+        $paths = json_decode($_POST['paths'] ?? '[]', true);
+        if (!is_array($paths) || count($paths) === 0) {
+            echo json_encode(['success' => false, 'error' => 'No paths provided']);
+            break;
+        }
+        $results = [];
+        foreach ($paths as $p) {
+            $safePath = sanitizePath($p);
+            if ($safePath) {
+                $results[] = array_merge(deleteFile($safePath), ['path' => $safePath]);
+            }
+        }
+        echo json_encode(['success' => true, 'results' => $results]);
         break;
 
     default:
