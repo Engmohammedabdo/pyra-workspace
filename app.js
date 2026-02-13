@@ -1,7 +1,24 @@
 /**
- * Pyra Workspace - File Manager v2
- * RTL support, DOCX preview, improved UX
+ * Pyra Workspace - File Manager v3
+ * Security hardening, performance improvements, enhanced UX
  */
+
+const FILE_TYPES = {
+    image: ['jpg','jpeg','png','gif','svg','webp','bmp','ico','tiff'],
+    video: ['mp4','webm','mov','avi','mkv','flv','wmv'],
+    audio: ['mp3','wav','ogg','flac','aac','m4a','wma'],
+    markdown: ['md','markdown'],
+    pdf: ['pdf'],
+    document: ['doc','docx'],
+    code: ['js','ts','py','php','html','css','json','xml','yaml','yml','sh','bash','sql','rb','go','rs','java','c','cpp','h','jsx','tsx','vue','svelte'],
+    archive: ['zip','rar','tar','gz','7z','bz2','xz'],
+    text: ['txt','log','csv','ini','cfg','conf','env','toml','properties'],
+    textExtra: ['gitignore','htaccess','npmrc','editorconfig']
+};
+FILE_TYPES.editable = [...FILE_TYPES.markdown, ...FILE_TYPES.code, ...FILE_TYPES.text];
+FILE_TYPES.allText = [...FILE_TYPES.editable, ...FILE_TYPES.textExtra];
+
+const TIME = { MINUTE: 60000, HOUR: 3600000, DAY: 86400000, WEEK: 604800000 };
 
 const App = {
     currentPath: '',
@@ -12,6 +29,10 @@ const App = {
     editedContent: '',
     history: [],
     historyIndex: -1,
+    sortBy: 'name',
+    sortDir: 'asc',
+    _previewId: 0,
+    _modalAbort: null,
 
     icons: {
         folder: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>',
@@ -38,7 +59,9 @@ const App = {
         empty: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/><line x1="9" y1="13" x2="15" y2="13" stroke-dasharray="2 2"/></svg>',
         word: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><path d="M8 13l1.5 4 1.5-4 1.5 4 1.5-4"/></svg>',
         back: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="15 18 9 12 15 6"/></svg>',
-        newFolder: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/><line x1="12" y1="11" x2="12" y2="17"/><line x1="9" y1="14" x2="15" y2="14"/></svg>'
+        newFolder: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/><line x1="12" y1="11" x2="12" y2="17"/><line x1="9" y1="14" x2="15" y2="14"/></svg>',
+        sortAsc: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="12" height="12"><polyline points="18 15 12 9 6 15"/></svg>',
+        sortDesc: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="12" height="12"><polyline points="6 9 12 15 18 9"/></svg>'
     },
 
     init() {
@@ -46,8 +69,18 @@ const App = {
         this.loadFiles('');
     },
 
+    _debounce(fn, ms) {
+        let timer;
+        return (...args) => {
+            clearTimeout(timer);
+            timer = setTimeout(() => fn.apply(this, args), ms);
+        };
+    },
+
     bindEvents() {
-        document.getElementById('searchInput').addEventListener('input', () => this.renderFiles());
+        document.getElementById('searchInput').addEventListener('input',
+            this._debounce(() => this.renderFiles(), 200)
+        );
 
         // Drag & drop
         let dragCounter = 0;
@@ -73,7 +106,6 @@ const App = {
     // === Navigation ===
     navigateTo(path) {
         if (this.currentPath !== path) {
-            // Push current to history
             if (this.historyIndex < this.history.length - 1) {
                 this.history = this.history.slice(0, this.historyIndex + 1);
             }
@@ -126,7 +158,7 @@ const App = {
             path += (path ? '/' : '') + part;
             const p = path;
             html += `<span class="breadcrumb-sep">\u203A</span>`;
-            html += `<span class="breadcrumb-item ${i === parts.length - 1 ? 'active' : ''}" onclick="App.loadFiles('${this.escHtml(p)}')">${this.escHtml(part)}</span>`;
+            html += `<span class="breadcrumb-item ${i === parts.length - 1 ? 'active' : ''}" onclick="App.loadFiles('${this.escAttr(p)}')">${this.escHtml(part)}</span>`;
         });
 
         el.innerHTML = html;
@@ -145,28 +177,71 @@ const App = {
         `;
     },
 
+    // === Sorting ===
+    toggleSort(column) {
+        if (this.sortBy === column) {
+            this.sortDir = this.sortDir === 'asc' ? 'desc' : 'asc';
+        } else {
+            this.sortBy = column;
+            this.sortDir = 'asc';
+        }
+        this.updateSortIndicators();
+        this.renderFiles();
+    },
+
+    updateSortIndicators() {
+        ['name', 'size', 'date'].forEach(col => {
+            const el = document.getElementById('sortIndicator' + col.charAt(0).toUpperCase() + col.slice(1));
+            if (el) {
+                if (this.sortBy === col) {
+                    el.innerHTML = this.sortDir === 'asc' ? this.icons.sortAsc : this.icons.sortDesc;
+                } else {
+                    el.innerHTML = '';
+                }
+            }
+        });
+    },
+
     renderFiles() {
         const el = document.getElementById('fileGrid');
         const searchVal = document.getElementById('searchInput').value.toLowerCase();
+
+        let filteredFolders = this.folders.filter(f => {
+            if (f.name === '.keep') return false;
+            if (searchVal && !f.name.toLowerCase().includes(searchVal)) return false;
+            return true;
+        });
+
+        let filteredFiles = this.files.filter(f => {
+            if (f.name === '.keep') return false;
+            if (searchVal && !f.name.toLowerCase().includes(searchVal)) return false;
+            return true;
+        });
+
+        // Sort folders by name always
+        filteredFolders.sort((a, b) => a.name.localeCompare(b.name));
+
+        // Sort files
+        filteredFiles.sort((a, b) => {
+            let cmp = 0;
+            switch (this.sortBy) {
+                case 'name': cmp = a.name.localeCompare(b.name); break;
+                case 'size': cmp = (a.size || 0) - (b.size || 0); break;
+                case 'date': cmp = new Date(a.updated_at || 0) - new Date(b.updated_at || 0); break;
+            }
+            return this.sortDir === 'asc' ? cmp : -cmp;
+        });
+
         let items = [];
-
-        this.folders.forEach(f => {
-            if (f.name === '.keep') return;
-            if (searchVal && !f.name.toLowerCase().includes(searchVal)) return;
-            items.push(this.renderFolderItem(f));
-        });
-
-        this.files.forEach(f => {
-            if (f.name === '.keep') return;
-            if (searchVal && !f.name.toLowerCase().includes(searchVal)) return;
-            items.push(this.renderFileItem(f));
-        });
+        filteredFolders.forEach(f => items.push(this.renderFolderItem(f)));
+        filteredFiles.forEach(f => items.push(this.renderFileItem(f)));
 
         if (items.length === 0) {
+            const isSearching = !!searchVal;
             el.innerHTML = `<div class="empty-state">
-                ${this.icons.empty}
-                <p>This folder is empty</p>
-                <p class="hint">Drop files here or click Upload</p>
+                ${isSearching ? this.icons.search : this.icons.empty}
+                <p>${isSearching ? 'No files match your search' : 'This folder is empty'}</p>
+                <p class="hint">${isSearching ? 'Try a different search term' : 'Drop files here or click Upload'}</p>
             </div>`;
         } else {
             el.innerHTML = items.join('');
@@ -175,13 +250,13 @@ const App = {
 
     renderFolderItem(f) {
         const fJson = this.escAttr(JSON.stringify(f));
-        return `<div class="file-item" onclick="App.navigateTo('${this.escHtml(f.path)}')" oncontextmenu="App.showContextMenu(event, 'folder', ${fJson})">
+        return `<div class="file-item" onclick="App.navigateTo('${this.escAttr(f.path)}')" oncontextmenu="App.showContextMenu(event, 'folder', ${fJson})">
             <div class="file-icon folder">${this.icons.folder}</div>
             <div class="file-name">${this.escHtml(f.name)}</div>
             <div class="file-size"></div>
             <div class="file-date"></div>
             <div class="file-actions-col">
-                <button class="file-action-btn delete" onclick="event.stopPropagation(); App.deleteFolder('${this.escHtml(f.path)}')" title="Delete">${this.icons.trash}</button>
+                <button class="file-action-btn delete" onclick="event.stopPropagation(); App.deleteFolder('${this.escAttr(f.path)}')" title="Delete">${this.icons.trash}</button>
             </div>
         </div>`;
     },
@@ -197,9 +272,9 @@ const App = {
             <div class="file-size">${this.formatSize(f.size)}</div>
             <div class="file-date">${this.formatDate(f.updated_at)}</div>
             <div class="file-actions-col">
-                <button class="file-action-btn" onclick="event.stopPropagation(); App.downloadFile('${this.escHtml(f.path)}')" title="Download">${this.icons.download}</button>
-                <button class="file-action-btn" onclick="event.stopPropagation(); App.showRenameModal('${this.escHtml(f.path)}', '${this.escHtml(f.name)}')" title="Rename">${this.icons.rename}</button>
-                <button class="file-action-btn delete" onclick="event.stopPropagation(); App.deleteFile('${this.escHtml(f.path)}')" title="Delete">${this.icons.trash}</button>
+                <button class="file-action-btn" onclick="event.stopPropagation(); App.downloadFile('${this.escAttr(f.path)}')" title="Download">${this.icons.download}</button>
+                <button class="file-action-btn" onclick="event.stopPropagation(); App.showRenameModal('${this.escAttr(f.path)}', '${this.escAttr(f.name)}')" title="Rename">${this.icons.rename}</button>
+                <button class="file-action-btn delete" onclick="event.stopPropagation(); App.deleteFile('${this.escAttr(f.path)}')" title="Delete">${this.icons.trash}</button>
             </div>
         </div>`;
     },
@@ -207,15 +282,15 @@ const App = {
     getFileIcon(name, mimetype) {
         const ext = name.split('.').pop().toLowerCase();
         const mt = (mimetype || '').toLowerCase();
-        if (mt.startsWith('image/') || ['jpg','jpeg','png','gif','svg','webp','bmp','ico','tiff'].includes(ext)) return { icon: this.icons.image, class: 'image' };
-        if (mt.startsWith('video/') || ['mp4','webm','mov','avi','mkv','flv','wmv'].includes(ext)) return { icon: this.icons.video, class: 'video' };
-        if (mt.startsWith('audio/') || ['mp3','wav','ogg','flac','aac','m4a','wma'].includes(ext)) return { icon: this.icons.audio, class: 'audio' };
-        if (['md','markdown'].includes(ext)) return { icon: this.icons.markdown, class: 'markdown' };
-        if (ext === 'pdf') return { icon: this.icons.pdf, class: 'pdf' };
-        if (['doc','docx'].includes(ext)) return { icon: this.icons.word, class: 'document' };
-        if (['js','ts','py','php','html','css','json','xml','yaml','yml','sh','bash','sql','rb','go','rs','java','c','cpp','h','jsx','tsx','vue','svelte'].includes(ext)) return { icon: this.icons.code, class: 'code' };
-        if (['zip','rar','tar','gz','7z','bz2','xz'].includes(ext)) return { icon: this.icons.archive, class: 'archive' };
-        if (['txt','log','csv','ini','cfg','conf','env'].includes(ext)) return { icon: this.icons.file, class: 'text' };
+        if (mt.startsWith('image/') || FILE_TYPES.image.includes(ext)) return { icon: this.icons.image, class: 'image' };
+        if (mt.startsWith('video/') || FILE_TYPES.video.includes(ext)) return { icon: this.icons.video, class: 'video' };
+        if (mt.startsWith('audio/') || FILE_TYPES.audio.includes(ext)) return { icon: this.icons.audio, class: 'audio' };
+        if (FILE_TYPES.markdown.includes(ext)) return { icon: this.icons.markdown, class: 'markdown' };
+        if (FILE_TYPES.pdf.includes(ext)) return { icon: this.icons.pdf, class: 'pdf' };
+        if (FILE_TYPES.document.includes(ext)) return { icon: this.icons.word, class: 'document' };
+        if (FILE_TYPES.code.includes(ext)) return { icon: this.icons.code, class: 'code' };
+        if (FILE_TYPES.archive.includes(ext)) return { icon: this.icons.archive, class: 'archive' };
+        if (FILE_TYPES.text.includes(ext)) return { icon: this.icons.file, class: 'text' };
         return { icon: this.icons.file, class: 'text' };
     },
 
@@ -234,6 +309,7 @@ const App = {
 
     // === Preview ===
     async previewFile(file) {
+        const myId = ++this._previewId;
         this.selectedFile = file;
         this.editMode = false;
         this.renderFiles();
@@ -247,7 +323,6 @@ const App = {
         title.textContent = file.name;
         panel.classList.add('open');
 
-        // File info bar
         if (fileInfo) {
             fileInfo.innerHTML = `
                 <span>${this.formatSize(file.size)}</span>
@@ -260,8 +335,8 @@ const App = {
         const mt = (file.mimetype || '').toLowerCase();
 
         let actionsHtml = `
-            <button class="btn btn-sm btn-ghost" onclick="App.downloadFile('${this.escHtml(file.path)}')" title="Download">${this.icons.download} Download</button>
-            <button class="btn btn-sm btn-ghost" onclick="App.copyPublicUrl('${this.escHtml(file.path)}')" title="Copy Link">${this.icons.link}</button>
+            <button class="btn btn-sm btn-ghost" onclick="App.downloadFile('${this.escAttr(file.path)}')" title="Download">${this.icons.download} Download</button>
+            <button class="btn btn-sm btn-ghost" onclick="App.copyPublicUrl('${this.escAttr(file.path)}')" title="Copy Link">${this.icons.link}</button>
         `;
         if (this.isEditable(ext, mt)) {
             actionsHtml += `<button class="btn btn-sm btn-ghost" onclick="App.editFile(${this.escAttr(JSON.stringify(file))})" title="Edit">${this.icons.edit}</button>`;
@@ -272,36 +347,42 @@ const App = {
         body.innerHTML = '<div style="display:flex;justify-content:center;padding:60px"><div class="spinner"></div></div>';
 
         // Render by type
-        if (mt.startsWith('image/') || ['jpg','jpeg','png','gif','svg','webp','bmp','ico'].includes(ext)) {
+        if (mt.startsWith('image/') || FILE_TYPES.image.includes(ext)) {
+            if (this._previewId !== myId) return;
             const url = this.getPublicUrl(file.path);
             body.innerHTML = `<div class="preview-image"><img src="${url}" alt="${this.escHtml(file.name)}" loading="lazy" /></div>`;
-        } else if (mt.startsWith('video/') || ['mp4','webm','mov'].includes(ext)) {
+        } else if (mt.startsWith('video/') || FILE_TYPES.video.includes(ext)) {
+            if (this._previewId !== myId) return;
             const url = this.getPublicUrl(file.path);
             body.innerHTML = `<div class="preview-video"><video controls src="${url}"></video></div>`;
-        } else if (mt.startsWith('audio/') || ['mp3','wav','ogg','flac','aac','m4a'].includes(ext)) {
+        } else if (mt.startsWith('audio/') || FILE_TYPES.audio.includes(ext)) {
+            if (this._previewId !== myId) return;
             const url = this.getPublicUrl(file.path);
             body.innerHTML = `<div class="preview-audio"><div class="audio-icon">${this.icons.audio}</div><audio controls src="${url}"></audio></div>`;
         } else if (ext === 'pdf') {
+            if (this._previewId !== myId) return;
             const url = this.getPublicUrl(file.path);
             body.innerHTML = `<div class="preview-pdf"><iframe src="${url}#toolbar=1"></iframe></div>`;
         } else if (['docx'].includes(ext)) {
-            await this.previewDocx(file, body);
-        } else if (['md','markdown'].includes(ext)) {
-            await this.previewMarkdown(file, body);
+            await this.previewDocx(file, body, myId);
+        } else if (FILE_TYPES.markdown.includes(ext)) {
+            await this.previewMarkdown(file, body, myId);
         } else if (this.isTextType(ext, mt)) {
-            await this.previewText(file, body);
+            await this.previewText(file, body, myId);
         } else {
+            if (this._previewId !== myId) return;
             body.innerHTML = `<div class="empty-state">
                 <div style="opacity:0.3">${this.getFileIcon(file.name, file.mimetype).icon}</div>
                 <p>Preview not available for this file type</p>
-                <button class="btn btn-primary" onclick="App.downloadFile('${this.escHtml(file.path)}')">${this.icons.download} Download</button>
+                <button class="btn btn-primary" onclick="App.downloadFile('${this.escAttr(file.path)}')">${this.icons.download} Download</button>
             </div>`;
         }
     },
 
-    async previewMarkdown(file, body) {
+    async previewMarkdown(file, body, previewId) {
         try {
             const res = await fetch(`api.php?action=content&path=${encodeURIComponent(file.path)}`);
+            if (this._previewId !== previewId) return;
             const data = await res.json();
             if (data.success) {
                 const rendered = this.renderMarkdown(data.content);
@@ -311,13 +392,15 @@ const App = {
                 body.innerHTML = `<div class="empty-state"><p>Failed to load file</p></div>`;
             }
         } catch (e) {
+            if (this._previewId !== previewId) return;
             body.innerHTML = `<div class="empty-state"><p>Error loading file</p></div>`;
         }
     },
 
-    async previewText(file, body) {
+    async previewText(file, body, previewId) {
         try {
             const res = await fetch(`api.php?action=content&path=${encodeURIComponent(file.path)}`);
+            if (this._previewId !== previewId) return;
             const data = await res.json();
             if (data.success) {
                 const isRtl = this.hasArabic(data.content);
@@ -326,38 +409,37 @@ const App = {
                 body.innerHTML = `<div class="empty-state"><p>Failed to load file</p></div>`;
             }
         } catch (e) {
+            if (this._previewId !== previewId) return;
             body.innerHTML = `<div class="empty-state"><p>Error loading file</p></div>`;
         }
     },
 
-    async previewDocx(file, body) {
+    async previewDocx(file, body, previewId) {
         try {
-            // Fetch the raw docx binary via proxy
             const res = await fetch(`api.php?action=proxy&path=${encodeURIComponent(file.path)}`);
+            if (this._previewId !== previewId) return;
             if (!res.ok) {
                 body.innerHTML = `<div class="empty-state"><p>Failed to load DOCX file</p></div>`;
                 return;
             }
             const arrayBuffer = await res.arrayBuffer();
+            if (this._previewId !== previewId) return;
 
-            // Use mammoth.js to convert
             if (typeof mammoth === 'undefined') {
                 body.innerHTML = `<div class="empty-state"><p>DOCX viewer loading failed</p></div>`;
                 return;
             }
 
             const result = await mammoth.convertToHtml({ arrayBuffer: arrayBuffer });
+            if (this._previewId !== previewId) return;
             const htmlContent = result.value;
             const isRtl = this.hasArabic(htmlContent);
 
             body.innerHTML = `<div class="preview-docx${isRtl ? ' rtl-content' : ''}" ${isRtl ? 'dir="rtl"' : ''}>${htmlContent}</div>`;
-
-            if (result.messages && result.messages.length > 0) {
-                console.log('DOCX conversion messages:', result.messages);
-            }
         } catch (e) {
+            if (this._previewId !== previewId) return;
             body.innerHTML = `<div class="empty-state"><p>Error loading DOCX: ${this.escHtml(e.message)}</p>
-                <button class="btn btn-primary" onclick="App.downloadFile('${this.escHtml(file.path)}')">${this.icons.download} Download Instead</button>
+                <button class="btn btn-primary" onclick="App.downloadFile('${this.escAttr(file.path)}')">${this.icons.download} Download Instead</button>
             </div>`;
         }
     },
@@ -393,7 +475,7 @@ const App = {
         if (!this.selectedFile) return;
         const ext = this.selectedFile.name.split('.').pop().toLowerCase();
         let mimeType = 'text/plain';
-        if (['md','markdown'].includes(ext)) mimeType = 'text/markdown';
+        if (FILE_TYPES.markdown.includes(ext)) mimeType = 'text/markdown';
         else if (ext === 'json') mimeType = 'application/json';
         else if (ext === 'html') mimeType = 'text/html';
         else if (ext === 'css') mimeType = 'text/css';
@@ -443,35 +525,48 @@ const App = {
         const progressText = document.getElementById('uploadProgressText');
         progress.classList.add('active');
 
+        const maxSize = window.PYRA_CONFIG?.maxUploadSize || 524288000;
         const total = fileList.length;
         let done = 0;
+        let errors = 0;
+        const concurrency = 3;
+        const files = Array.from(fileList);
 
-        for (let i = 0; i < fileList.length; i++) {
-            const file = fileList[i];
+        const uploadOne = async (file) => {
+            if (file.size > maxSize) {
+                this.toast(`${file.name} exceeds max size (${this.formatSize(maxSize)})`, 'error');
+                errors++;
+                done++;
+                progressFill.style.width = `${(done / total) * 100}%`;
+                return;
+            }
             progressText.textContent = `Uploading ${file.name} (${done + 1}/${total})...`;
-            progressFill.style.width = `${(done / total) * 100}%`;
-
             const formData = new FormData();
             formData.append('action', 'upload');
             formData.append('prefix', this.currentPath);
             formData.append('file', file);
-
             try {
                 const res = await fetch('api.php', { method: 'POST', body: formData });
                 const data = await res.json();
-                if (!data.success) this.toast(`Failed: ${file.name}`, 'error');
-                done++;
+                if (!data.success) { this.toast(`Failed: ${file.name}`, 'error'); errors++; }
             } catch (e) {
-                this.toast(`Error: ${e.message}`, 'error');
-                done++;
+                this.toast(`Error: ${file.name}`, 'error');
+                errors++;
             }
+            done++;
             progressFill.style.width = `${(done / total) * 100}%`;
+            progressText.textContent = `Uploaded ${done}/${total}`;
+        };
+
+        for (let i = 0; i < files.length; i += concurrency) {
+            const batch = files.slice(i, i + concurrency);
+            await Promise.all(batch.map(f => uploadOne(f)));
         }
 
-        progressText.textContent = `Done (${done}/${total})`;
+        progressText.textContent = `Done (${done - errors}/${total} successful)`;
         setTimeout(() => { progress.classList.remove('active'); progressFill.style.width = '0%'; }, 2000);
         this.loadFiles();
-        this.toast(`${done} file(s) uploaded`, 'success');
+        this.toast(`${done - errors} file(s) uploaded${errors ? `, ${errors} failed` : ''}`, errors ? 'error' : 'success');
     },
 
     downloadFile(path) {
@@ -503,35 +598,54 @@ const App = {
 
     async deleteFolder(path) {
         if (!confirm(`Delete folder "${path.split('/').pop()}" and all its contents?`)) return;
+        this.showLoading(true);
+        try {
+            const allPaths = await this.collectFolderFiles(path);
+            if (allPaths.length > 0) {
+                const formData = new FormData();
+                formData.append('action', 'deleteBatch');
+                formData.append('paths', JSON.stringify(allPaths));
+                const res = await fetch('api.php', { method: 'POST', body: formData });
+                const data = await res.json();
+                if (data.success) {
+                    const failed = (data.results || []).filter(r => !r.success).length;
+                    if (failed > 0) {
+                        this.toast(`Deleted with ${failed} error(s)`, 'error');
+                    } else {
+                        this.toast('Folder deleted', 'success');
+                    }
+                } else {
+                    this.toast('Delete failed: ' + (data.error || ''), 'error');
+                }
+            } else {
+                this.toast('Folder deleted', 'success');
+            }
+            this.loadFiles();
+        } catch (e) {
+            this.toast('Delete error: ' + e.message, 'error');
+        }
+        this.showLoading(false);
+    },
+
+    async collectFolderFiles(path) {
+        let allPaths = [];
         try {
             const res = await fetch(`api.php?action=list&prefix=${encodeURIComponent(path)}`);
+            if (!res.ok) return allPaths;
             const data = await res.json();
             if (data.success) {
                 for (const file of data.files) {
-                    const fd = new FormData();
-                    fd.append('action', 'delete');
-                    fd.append('path', file.path);
-                    await fetch('api.php', { method: 'POST', body: fd });
+                    allPaths.push(file.path);
                 }
-                for (const folder of data.folders) await this.deleteFolderRecursive(folder.path);
-                this.toast('Folder deleted', 'success');
-                this.loadFiles();
+                for (const folder of data.folders) {
+                    const subPaths = await this.collectFolderFiles(folder.path);
+                    allPaths = allPaths.concat(subPaths);
+                }
             }
-        } catch (e) { this.toast('Delete error: ' + e.message, 'error'); }
-    },
-
-    async deleteFolderRecursive(path) {
-        const res = await fetch(`api.php?action=list&prefix=${encodeURIComponent(path)}`);
-        const data = await res.json();
-        if (data.success) {
-            for (const file of data.files) {
-                const fd = new FormData();
-                fd.append('action', 'delete');
-                fd.append('path', file.path);
-                await fetch('api.php', { method: 'POST', body: fd });
-            }
-            for (const folder of data.folders) await this.deleteFolderRecursive(folder.path);
+        } catch (e) {
+            // Continue with what we have
         }
+        return allPaths;
     },
 
     showRenameModal(path, currentName) {
@@ -562,6 +676,33 @@ const App = {
         } catch (e) { this.toast('Error: ' + e.message, 'error'); }
     },
 
+    showRenameFolderModal(path, currentName) {
+        this.showModal('Rename Folder', currentName, async (newName) => {
+            if (!newName || newName === currentName) return;
+            this.showLoading(true);
+            try {
+                const allFiles = await this.collectFolderFiles(path);
+                const dir = path.substring(0, path.lastIndexOf('/'));
+                const newFolderPath = dir ? dir + '/' + newName : newName;
+
+                for (const filePath of allFiles) {
+                    const newFilePath = filePath.replace(path, newFolderPath);
+                    const fd = new FormData();
+                    fd.append('action', 'rename');
+                    fd.append('oldPath', filePath);
+                    fd.append('newPath', newFilePath);
+                    await fetch('api.php', { method: 'POST', body: fd });
+                }
+
+                this.toast('Folder renamed', 'success');
+                this.loadFiles();
+            } catch (e) {
+                this.toast('Rename failed: ' + e.message, 'error');
+            }
+            this.showLoading(false);
+        });
+    },
+
     showNewFolderModal() {
         this.showModal('New Folder', '', (name) => { if (name) this.createFolder(name); });
     },
@@ -581,21 +722,37 @@ const App = {
 
     copyPublicUrl(path) {
         const url = this.getPublicUrl(path);
-        navigator.clipboard.writeText(url).then(() => {
-            this.toast('Link copied', 'success');
-        }).catch(() => {
-            const input = document.createElement('input');
-            input.value = url;
-            document.body.appendChild(input);
-            input.select();
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+            navigator.clipboard.writeText(url).then(() => {
+                this.toast('Link copied', 'success');
+            }).catch(() => {
+                this.fallbackCopy(url);
+            });
+        } else {
+            this.fallbackCopy(url);
+        }
+    },
+
+    fallbackCopy(text) {
+        const ta = document.createElement('textarea');
+        ta.value = text;
+        ta.style.cssText = 'position:fixed;left:-9999px;top:-9999px';
+        document.body.appendChild(ta);
+        ta.focus();
+        ta.select();
+        try {
             document.execCommand('copy');
-            document.body.removeChild(input);
             this.toast('Link copied', 'success');
-        });
+        } catch (e) {
+            this.toast('Failed to copy link', 'error');
+        }
+        document.body.removeChild(ta);
     },
 
     getPublicUrl(path) {
-        return `https://db.pyramedia.info/storage/v1/object/public/pyraai-workspace/${path}`;
+        const base = window.PYRA_CONFIG?.supabaseUrl || '';
+        const bucket = window.PYRA_CONFIG?.bucket || '';
+        return `${base}/storage/v1/object/public/${bucket}/${path}`;
     },
 
     // === Context Menu ===
@@ -608,15 +765,16 @@ const App = {
 
         if (type === 'folder') {
             html = `
-                <div class="context-menu-item" onclick="App.navigateTo('${this.escHtml(item.path)}')">${this.icons.folder} Open</div>
+                <div class="context-menu-item" onclick="App.navigateTo('${this.escAttr(item.path)}')">${this.icons.folder} Open</div>
                 <div class="context-menu-sep"></div>
-                <div class="context-menu-item danger" onclick="App.deleteFolder('${this.escHtml(item.path)}')">${this.icons.trash} Delete</div>
+                <div class="context-menu-item" onclick="App.showRenameFolderModal('${this.escAttr(item.path)}', '${this.escAttr(item.name)}')">${this.icons.rename} Rename</div>
+                <div class="context-menu-item danger" onclick="App.deleteFolder('${this.escAttr(item.path)}')">${this.icons.trash} Delete</div>
             `;
         } else {
             html = `
                 <div class="context-menu-item" onclick="App.previewFile(${fJson})">${this.icons.eye} Preview</div>
-                <div class="context-menu-item" onclick="App.downloadFile('${this.escHtml(item.path)}')">${this.icons.download} Download</div>
-                <div class="context-menu-item" onclick="App.copyPublicUrl('${this.escHtml(item.path)}')">${this.icons.link} Copy Link</div>
+                <div class="context-menu-item" onclick="App.downloadFile('${this.escAttr(item.path)}')">${this.icons.download} Download</div>
+                <div class="context-menu-item" onclick="App.copyPublicUrl('${this.escAttr(item.path)}')">${this.icons.link} Copy Link</div>
             `;
             const ext = item.name.split('.').pop().toLowerCase();
             if (this.isEditable(ext, item.mimetype)) {
@@ -624,8 +782,8 @@ const App = {
             }
             html += `
                 <div class="context-menu-sep"></div>
-                <div class="context-menu-item" onclick="App.showRenameModal('${this.escHtml(item.path)}', '${this.escHtml(item.name)}')">${this.icons.rename} Rename</div>
-                <div class="context-menu-item danger" onclick="App.deleteFile('${this.escHtml(item.path)}')">${this.icons.trash} Delete</div>
+                <div class="context-menu-item" onclick="App.showRenameModal('${this.escAttr(item.path)}', '${this.escAttr(item.name)}')">${this.icons.rename} Rename</div>
+                <div class="context-menu-item danger" onclick="App.deleteFile('${this.escAttr(item.path)}')">${this.icons.trash} Delete</div>
             `;
         }
 
@@ -649,6 +807,10 @@ const App = {
         input.value = defaultValue;
         overlay.classList.add('active');
 
+        if (this._modalAbort) this._modalAbort.abort();
+        this._modalAbort = new AbortController();
+        const signal = this._modalAbort.signal;
+
         setTimeout(() => {
             input.focus();
             const dotIndex = defaultValue.lastIndexOf('.');
@@ -658,29 +820,28 @@ const App = {
 
         const confirmBtn = document.getElementById('modalConfirm');
         const cancelBtn = document.getElementById('modalCancel');
-        const newConfirm = confirmBtn.cloneNode(true);
-        const newCancel = cancelBtn.cloneNode(true);
-        confirmBtn.parentNode.replaceChild(newConfirm, confirmBtn);
-        cancelBtn.parentNode.replaceChild(newCancel, cancelBtn);
 
-        newConfirm.addEventListener('click', () => { callback(input.value.trim()); this.closeModal(); });
-        newCancel.addEventListener('click', () => this.closeModal());
-        input.onkeydown = (e) => { if (e.key === 'Enter') { callback(input.value.trim()); this.closeModal(); } };
+        const execute = () => { callback(input.value.trim()); this.closeModal(); };
+
+        confirmBtn.addEventListener('click', execute, { signal });
+        cancelBtn.addEventListener('click', () => this.closeModal(), { signal });
+        input.addEventListener('keydown', (e) => { if (e.key === 'Enter') execute(); }, { signal });
     },
 
     closeModal() {
         document.getElementById('modalOverlay').classList.remove('active');
+        document.getElementById('modalInput').value = '';
+        if (this._modalAbort) { this._modalAbort.abort(); this._modalAbort = null; }
     },
 
     // === Helpers ===
     isEditable(ext) {
-        return ['md','markdown','txt','log','csv','json','xml','yaml','yml','html','css','js','ts','py','php','sh','bash','sql','rb','go','rs','java','c','cpp','h','jsx','tsx','vue','svelte','ini','cfg','conf','env','toml','properties'].includes(ext);
+        return FILE_TYPES.editable.includes(ext);
     },
 
     isTextType(ext, mimetype) {
-        const textExts = ['md','markdown','txt','log','csv','json','xml','yaml','yml','html','css','js','ts','py','php','sh','bash','sql','rb','go','rs','java','c','cpp','h','jsx','tsx','vue','svelte','ini','cfg','conf','env','toml','properties','gitignore','htaccess','npmrc','editorconfig'];
         const mt = (mimetype || '').toLowerCase();
-        return textExts.includes(ext) || mt.startsWith('text/') || mt === 'application/json' || mt === 'application/xml' || mt === 'application/javascript';
+        return FILE_TYPES.allText.includes(ext) || mt.startsWith('text/') || mt === 'application/json' || mt === 'application/xml' || mt === 'application/javascript';
     },
 
     formatSize(bytes) {
@@ -696,10 +857,10 @@ const App = {
         const d = new Date(dateStr);
         const now = new Date();
         const diff = now - d;
-        if (diff < 60000) return 'Just now';
-        if (diff < 3600000) return Math.floor(diff / 60000) + 'm ago';
-        if (diff < 86400000) return Math.floor(diff / 3600000) + 'h ago';
-        if (diff < 604800000) return Math.floor(diff / 86400000) + 'd ago';
+        if (diff < TIME.MINUTE) return 'Just now';
+        if (diff < TIME.HOUR) return Math.floor(diff / TIME.MINUTE) + 'm ago';
+        if (diff < TIME.DAY) return Math.floor(diff / TIME.HOUR) + 'h ago';
+        if (diff < TIME.WEEK) return Math.floor(diff / TIME.DAY) + 'd ago';
         return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: d.getFullYear() !== now.getFullYear() ? 'numeric' : undefined });
     },
 
@@ -711,7 +872,17 @@ const App = {
     },
 
     escAttr(str) {
-        return str.replace(/'/g, '&#39;').replace(/"/g, '&quot;');
+        if (!str) return '';
+        return str.replace(/&/g, '&amp;').replace(/'/g, '&#39;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    },
+
+    sanitizeUrl(url) {
+        const decoded = url.replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;/g, "'");
+        const trimmed = decoded.trim().toLowerCase();
+        if (trimmed.startsWith('javascript:') || trimmed.startsWith('data:') || trimmed.startsWith('vbscript:')) {
+            return '#';
+        }
+        return url.replace(/"/g, '&quot;').replace(/'/g, '&#39;');
     },
 
     showLoading(show) {
@@ -764,9 +935,13 @@ const App = {
         html = html.replace(/^- \[x\]\s+(.+)$/gm, '<li style="list-style:none"><input type="checkbox" checked disabled> $1</li>');
         html = html.replace(/^- \[ \]\s+(.+)$/gm, '<li style="list-style:none"><input type="checkbox" disabled> $1</li>');
 
-        // Links & Images
-        html = html.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, '<img src="$2" alt="$1" />');
-        html = html.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank">$1</a>');
+        // Links & Images (with URL sanitization)
+        html = html.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, (m, alt, src) => {
+            return `<img src="${this.sanitizeUrl(src)}" alt="${alt}" />`;
+        });
+        html = html.replace(/\[([^\]]+)\]\(([^)]+)\)/g, (m, text, href) => {
+            return `<a href="${this.sanitizeUrl(href)}" target="_blank" rel="noopener noreferrer">${text}</a>`;
+        });
 
         // Blockquotes
         html = html.replace(/^&gt;\s+(.+)$/gm, '<blockquote>$1</blockquote>');
