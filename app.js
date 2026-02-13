@@ -1,6 +1,7 @@
 /**
  * Pyra Workspace - File Manager v3
  * Security hardening, performance improvements, enhanced UX
+ * Auth, permissions, reviews, and user management
  */
 
 const FILE_TYPES = {
@@ -33,6 +34,8 @@ const App = {
     sortDir: 'asc',
     _previewId: 0,
     _modalAbort: null,
+    user: window.PYRA_CONFIG?.user || null,
+    permissions: window.PYRA_CONFIG?.user?.permissions || {},
 
     icons: {
         folder: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>',
@@ -61,11 +64,26 @@ const App = {
         back: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="15 18 9 12 15 6"/></svg>',
         newFolder: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/><line x1="12" y1="11" x2="12" y2="17"/><line x1="9" y1="14" x2="15" y2="14"/></svg>',
         sortAsc: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="12" height="12"><polyline points="18 15 12 9 6 15"/></svg>',
-        sortDesc: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="12" height="12"><polyline points="6 9 12 15 18 9"/></svg>'
+        sortDesc: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="12" height="12"><polyline points="6 9 12 15 18 9"/></svg>',
+        users: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>',
+        check: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>',
+        comment: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>',
+        key: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.78 7.78 5.5 5.5 0 0 1 7.78-7.78zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4"/></svg>'
     },
 
     init() {
         this.bindEvents();
+        if (window.PYRA_CONFIG?.auth) {
+            this.user = window.PYRA_CONFIG.user;
+            this.permissions = window.PYRA_CONFIG.user?.permissions || {};
+            if (this.user && this.user.role !== 'admin' && this.user.permissions?.allowed_paths) {
+                const allowed = this.user.permissions.allowed_paths;
+                if (Array.isArray(allowed) && allowed.length > 0 && allowed[0] !== '*') {
+                    this.loadFiles(allowed[0]);
+                    return;
+                }
+            }
+        }
         this.loadFiles('');
     },
 
@@ -77,21 +95,82 @@ const App = {
         };
     },
 
+    // === Auth Helpers ===
+    canDo(permission) {
+        if (this.isAdmin()) return true;
+        return !!this.permissions[permission];
+    },
+
+    isAdmin() {
+        return this.user?.role === 'admin';
+    },
+
+    async apiFetch(url, options) {
+        const res = await fetch(url, options);
+        if (res.status === 401) {
+            location.reload();
+            return res;
+        }
+        return res;
+    },
+
+    handleLogin(e) {
+        e.preventDefault();
+        const username = document.getElementById('loginUsername').value.trim();
+        const password = document.getElementById('loginPassword').value;
+        const btn = document.getElementById('loginBtn');
+        const errorEl = document.getElementById('loginError');
+        errorEl.textContent = '';
+        btn.disabled = true;
+
+        this.apiFetch('api.php', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ action: 'login', username, password })
+        }).then(res => res.json()).then(data => {
+            if (data.success) {
+                location.reload();
+            } else {
+                errorEl.textContent = data.error || 'Login failed';
+                btn.disabled = false;
+            }
+        }).catch(err => {
+            errorEl.textContent = 'Connection error: ' + err.message;
+            btn.disabled = false;
+        });
+
+        return false;
+    },
+
+    handleLogout() {
+        this.apiFetch('api.php', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ action: 'logout' })
+        }).then(() => {
+            location.reload();
+        }).catch(() => {
+            location.reload();
+        });
+    },
+
     bindEvents() {
-        document.getElementById('searchInput').addEventListener('input',
+        document.getElementById('searchInput')?.addEventListener('input',
             this._debounce(() => this.renderFiles(), 200)
         );
 
-        // Drag & drop
-        let dragCounter = 0;
-        document.body.addEventListener('dragenter', (e) => { e.preventDefault(); dragCounter++; document.getElementById('dropZone').classList.add('active'); });
-        document.body.addEventListener('dragleave', (e) => { e.preventDefault(); dragCounter--; if (dragCounter === 0) document.getElementById('dropZone').classList.remove('active'); });
-        document.body.addEventListener('dragover', (e) => e.preventDefault());
-        document.body.addEventListener('drop', (e) => {
-            e.preventDefault(); dragCounter = 0;
-            document.getElementById('dropZone').classList.remove('active');
-            if (e.dataTransfer.files.length > 0) this.uploadFiles(e.dataTransfer.files);
-        });
+        // Drag & drop - only if user can upload
+        if (this.canDo('can_upload')) {
+            let dragCounter = 0;
+            document.body.addEventListener('dragenter', (e) => { e.preventDefault(); dragCounter++; document.getElementById('dropZone').classList.add('active'); });
+            document.body.addEventListener('dragleave', (e) => { e.preventDefault(); dragCounter--; if (dragCounter === 0) document.getElementById('dropZone').classList.remove('active'); });
+            document.body.addEventListener('dragover', (e) => e.preventDefault());
+            document.body.addEventListener('drop', (e) => {
+                e.preventDefault(); dragCounter = 0;
+                document.getElementById('dropZone').classList.remove('active');
+                if (e.dataTransfer.files.length > 0) this.uploadFiles(e.dataTransfer.files);
+            });
+        }
 
         document.addEventListener('click', () => document.getElementById('contextMenu').classList.remove('active'));
 
@@ -129,7 +208,7 @@ const App = {
         this.showLoading(true);
 
         try {
-            const res = await fetch(`api.php?action=list&prefix=${encodeURIComponent(this.currentPath)}`);
+            const res = await this.apiFetch(`api.php?action=list&prefix=${encodeURIComponent(this.currentPath)}`);
             const data = await res.json();
             if (data.success) {
                 this.folders = data.folders;
@@ -250,13 +329,17 @@ const App = {
 
     renderFolderItem(f) {
         const fJson = this.escAttr(JSON.stringify(f));
+        let deleteBtn = '';
+        if (this.canDo('can_delete')) {
+            deleteBtn = `<button class="file-action-btn delete" onclick="event.stopPropagation(); App.deleteFolder('${this.escAttr(f.path)}')" title="Delete">${this.icons.trash}</button>`;
+        }
         return `<div class="file-item" onclick="App.navigateTo('${this.escAttr(f.path)}')" oncontextmenu="App.showContextMenu(event, 'folder', ${fJson})">
             <div class="file-icon folder">${this.icons.folder}</div>
             <div class="file-name">${this.escHtml(f.name)}</div>
             <div class="file-size"></div>
             <div class="file-date"></div>
             <div class="file-actions-col">
-                <button class="file-action-btn delete" onclick="event.stopPropagation(); App.deleteFolder('${this.escAttr(f.path)}')" title="Delete">${this.icons.trash}</button>
+                ${deleteBtn}
             </div>
         </div>`;
     },
@@ -266,15 +349,24 @@ const App = {
         const selected = this.selectedFile && this.selectedFile.path === f.path ? 'selected' : '';
         const fJson = this.escAttr(JSON.stringify(f));
 
+        let actionBtns = '';
+        if (this.canDo('can_download')) {
+            actionBtns += `<button class="file-action-btn" onclick="event.stopPropagation(); App.downloadFile('${this.escAttr(f.path)}')" title="Download">${this.icons.download}</button>`;
+        }
+        if (this.canDo('can_edit')) {
+            actionBtns += `<button class="file-action-btn" onclick="event.stopPropagation(); App.showRenameModal('${this.escAttr(f.path)}', '${this.escAttr(f.name)}')" title="Rename">${this.icons.rename}</button>`;
+        }
+        if (this.canDo('can_delete')) {
+            actionBtns += `<button class="file-action-btn delete" onclick="event.stopPropagation(); App.deleteFile('${this.escAttr(f.path)}')" title="Delete">${this.icons.trash}</button>`;
+        }
+
         return `<div class="file-item ${selected}" onclick="App.previewFile(${fJson})" oncontextmenu="App.showContextMenu(event, 'file', ${fJson})">
             <div class="file-icon ${iconInfo.class}">${iconInfo.icon}</div>
             <div class="file-name">${this.escHtml(f.name)}</div>
             <div class="file-size">${this.formatSize(f.size)}</div>
             <div class="file-date">${this.formatDate(f.updated_at)}</div>
             <div class="file-actions-col">
-                <button class="file-action-btn" onclick="event.stopPropagation(); App.downloadFile('${this.escAttr(f.path)}')" title="Download">${this.icons.download}</button>
-                <button class="file-action-btn" onclick="event.stopPropagation(); App.showRenameModal('${this.escAttr(f.path)}', '${this.escAttr(f.name)}')" title="Rename">${this.icons.rename}</button>
-                <button class="file-action-btn delete" onclick="event.stopPropagation(); App.deleteFile('${this.escAttr(f.path)}')" title="Delete">${this.icons.trash}</button>
+                ${actionBtns}
             </div>
         </div>`;
     },
@@ -334,11 +426,12 @@ const App = {
         const ext = file.name.split('.').pop().toLowerCase();
         const mt = (file.mimetype || '').toLowerCase();
 
-        let actionsHtml = `
-            <button class="btn btn-sm btn-ghost" onclick="App.downloadFile('${this.escAttr(file.path)}')" title="Download">${this.icons.download} Download</button>
-            <button class="btn btn-sm btn-ghost" onclick="App.copyPublicUrl('${this.escAttr(file.path)}')" title="Copy Link">${this.icons.link}</button>
-        `;
-        if (this.isEditable(ext, mt)) {
+        let actionsHtml = '';
+        if (this.canDo('can_download')) {
+            actionsHtml += `<button class="btn btn-sm btn-ghost" onclick="App.downloadFile('${this.escAttr(file.path)}')" title="Download">${this.icons.download} Download</button>`;
+        }
+        actionsHtml += `<button class="btn btn-sm btn-ghost" onclick="App.copyPublicUrl('${this.escAttr(file.path)}')" title="Copy Link">${this.icons.link}</button>`;
+        if (this.canDo('can_edit') && this.isEditable(ext, mt)) {
             actionsHtml += `<button class="btn btn-sm btn-ghost" onclick="App.editFile(${this.escAttr(JSON.stringify(file))})" title="Edit">${this.icons.edit}</button>`;
         }
         actionsHtml += `<button class="btn btn-sm btn-ghost" onclick="App.closePreview()" title="Close">${this.icons.close}</button>`;
@@ -377,11 +470,16 @@ const App = {
                 <button class="btn btn-primary" onclick="App.downloadFile('${this.escAttr(file.path)}')">${this.icons.download} Download</button>
             </div>`;
         }
+
+        // Load reviews below preview content
+        if (this._previewId === myId) {
+            this.loadFileReviews(file.path);
+        }
     },
 
     async previewMarkdown(file, body, previewId) {
         try {
-            const res = await fetch(`api.php?action=content&path=${encodeURIComponent(file.path)}`);
+            const res = await this.apiFetch(`api.php?action=content&path=${encodeURIComponent(file.path)}`);
             if (this._previewId !== previewId) return;
             const data = await res.json();
             if (data.success) {
@@ -399,7 +497,7 @@ const App = {
 
     async previewText(file, body, previewId) {
         try {
-            const res = await fetch(`api.php?action=content&path=${encodeURIComponent(file.path)}`);
+            const res = await this.apiFetch(`api.php?action=content&path=${encodeURIComponent(file.path)}`);
             if (this._previewId !== previewId) return;
             const data = await res.json();
             if (data.success) {
@@ -416,7 +514,7 @@ const App = {
 
     async previewDocx(file, body, previewId) {
         try {
-            const res = await fetch(`api.php?action=proxy&path=${encodeURIComponent(file.path)}`);
+            const res = await this.apiFetch(`api.php?action=proxy&path=${encodeURIComponent(file.path)}`);
             if (this._previewId !== previewId) return;
             if (!res.ok) {
                 body.innerHTML = `<div class="empty-state"><p>Failed to load DOCX file</p></div>`;
@@ -445,6 +543,10 @@ const App = {
     },
 
     async editFile(file) {
+        if (!this.canDo('can_edit')) {
+            this.toast('You do not have permission to edit files', 'error');
+            return;
+        }
         this.editMode = true;
         const body = document.getElementById('previewBody');
         const actions = document.getElementById('previewActions');
@@ -458,7 +560,7 @@ const App = {
         body.innerHTML = '<div style="display:flex;justify-content:center;padding:60px"><div class="spinner"></div></div>';
 
         try {
-            const res = await fetch(`api.php?action=content&path=${encodeURIComponent(file.path)}`);
+            const res = await this.apiFetch(`api.php?action=content&path=${encodeURIComponent(file.path)}`);
             const data = await res.json();
             if (data.success) {
                 this.editedContent = data.content;
@@ -490,7 +592,7 @@ const App = {
         formData.append('mimeType', mimeType);
 
         try {
-            const res = await fetch('api.php', { method: 'POST', body: formData });
+            const res = await this.apiFetch('api.php', { method: 'POST', body: formData });
             const data = await res.json();
             if (data.success) {
                 this.toast('File saved', 'success');
@@ -546,7 +648,7 @@ const App = {
             formData.append('prefix', this.currentPath);
             formData.append('file', file);
             try {
-                const res = await fetch('api.php', { method: 'POST', body: formData });
+                const res = await this.apiFetch('api.php', { method: 'POST', body: formData });
                 const data = await res.json();
                 if (!data.success) { this.toast(`Failed: ${file.name}`, 'error'); errors++; }
             } catch (e) {
@@ -584,7 +686,7 @@ const App = {
             const formData = new FormData();
             formData.append('action', 'delete');
             formData.append('path', path);
-            const res = await fetch('api.php', { method: 'POST', body: formData });
+            const res = await this.apiFetch('api.php', { method: 'POST', body: formData });
             const data = await res.json();
             if (data.success) {
                 this.toast('File deleted', 'success');
@@ -605,7 +707,7 @@ const App = {
                 const formData = new FormData();
                 formData.append('action', 'deleteBatch');
                 formData.append('paths', JSON.stringify(allPaths));
-                const res = await fetch('api.php', { method: 'POST', body: formData });
+                const res = await this.apiFetch('api.php', { method: 'POST', body: formData });
                 const data = await res.json();
                 if (data.success) {
                     const failed = (data.results || []).filter(r => !r.success).length;
@@ -630,7 +732,7 @@ const App = {
     async collectFolderFiles(path) {
         let allPaths = [];
         try {
-            const res = await fetch(`api.php?action=list&prefix=${encodeURIComponent(path)}`);
+            const res = await this.apiFetch(`api.php?action=list&prefix=${encodeURIComponent(path)}`);
             if (!res.ok) return allPaths;
             const data = await res.json();
             if (data.success) {
@@ -664,7 +766,7 @@ const App = {
             formData.append('action', 'rename');
             formData.append('oldPath', oldPath);
             formData.append('newPath', newPath);
-            const res = await fetch('api.php', { method: 'POST', body: formData });
+            const res = await this.apiFetch('api.php', { method: 'POST', body: formData });
             const data = await res.json();
             if (data.success) {
                 this.toast('Renamed', 'success');
@@ -691,7 +793,7 @@ const App = {
                     fd.append('action', 'rename');
                     fd.append('oldPath', filePath);
                     fd.append('newPath', newFilePath);
-                    await fetch('api.php', { method: 'POST', body: fd });
+                    await this.apiFetch('api.php', { method: 'POST', body: fd });
                 }
 
                 this.toast('Folder renamed', 'success');
@@ -713,7 +815,7 @@ const App = {
             formData.append('action', 'createFolder');
             formData.append('prefix', this.currentPath);
             formData.append('folderName', name);
-            const res = await fetch('api.php', { method: 'POST', body: formData });
+            const res = await this.apiFetch('api.php', { method: 'POST', body: formData });
             const data = await res.json();
             if (data.success) { this.toast('Folder created', 'success'); this.loadFiles(); }
             else this.toast('Failed: ' + (data.error || ''), 'error');
@@ -764,27 +866,35 @@ const App = {
         let html = '';
 
         if (type === 'folder') {
-            html = `
-                <div class="context-menu-item" onclick="App.navigateTo('${this.escAttr(item.path)}')">${this.icons.folder} Open</div>
-                <div class="context-menu-sep"></div>
-                <div class="context-menu-item" onclick="App.showRenameFolderModal('${this.escAttr(item.path)}', '${this.escAttr(item.name)}')">${this.icons.rename} Rename</div>
-                <div class="context-menu-item danger" onclick="App.deleteFolder('${this.escAttr(item.path)}')">${this.icons.trash} Delete</div>
-            `;
+            html = `<div class="context-menu-item" onclick="App.navigateTo('${this.escAttr(item.path)}')">${this.icons.folder} Open</div>`;
+            if (this.canDo('can_edit') || this.canDo('can_delete')) {
+                html += `<div class="context-menu-sep"></div>`;
+            }
+            if (this.canDo('can_edit')) {
+                html += `<div class="context-menu-item" onclick="App.showRenameFolderModal('${this.escAttr(item.path)}', '${this.escAttr(item.name)}')">${this.icons.rename} Rename</div>`;
+            }
+            if (this.canDo('can_delete')) {
+                html += `<div class="context-menu-item danger" onclick="App.deleteFolder('${this.escAttr(item.path)}')">${this.icons.trash} Delete</div>`;
+            }
         } else {
-            html = `
-                <div class="context-menu-item" onclick="App.previewFile(${fJson})">${this.icons.eye} Preview</div>
-                <div class="context-menu-item" onclick="App.downloadFile('${this.escAttr(item.path)}')">${this.icons.download} Download</div>
-                <div class="context-menu-item" onclick="App.copyPublicUrl('${this.escAttr(item.path)}')">${this.icons.link} Copy Link</div>
-            `;
+            html = `<div class="context-menu-item" onclick="App.previewFile(${fJson})">${this.icons.eye} Preview</div>`;
+            if (this.canDo('can_download')) {
+                html += `<div class="context-menu-item" onclick="App.downloadFile('${this.escAttr(item.path)}')">${this.icons.download} Download</div>`;
+            }
+            html += `<div class="context-menu-item" onclick="App.copyPublicUrl('${this.escAttr(item.path)}')">${this.icons.link} Copy Link</div>`;
             const ext = item.name.split('.').pop().toLowerCase();
-            if (this.isEditable(ext, item.mimetype)) {
+            if (this.canDo('can_edit') && this.isEditable(ext, item.mimetype)) {
                 html += `<div class="context-menu-item" onclick="App.previewFile(${fJson}); setTimeout(() => App.editFile(${fJson}), 300)">${this.icons.edit} Edit</div>`;
             }
-            html += `
-                <div class="context-menu-sep"></div>
-                <div class="context-menu-item" onclick="App.showRenameModal('${this.escAttr(item.path)}', '${this.escAttr(item.name)}')">${this.icons.rename} Rename</div>
-                <div class="context-menu-item danger" onclick="App.deleteFile('${this.escAttr(item.path)}')">${this.icons.trash} Delete</div>
-            `;
+            if (this.canDo('can_edit') || this.canDo('can_delete')) {
+                html += `<div class="context-menu-sep"></div>`;
+            }
+            if (this.canDo('can_edit')) {
+                html += `<div class="context-menu-item" onclick="App.showRenameModal('${this.escAttr(item.path)}', '${this.escAttr(item.name)}')">${this.icons.rename} Rename</div>`;
+            }
+            if (this.canDo('can_delete')) {
+                html += `<div class="context-menu-item danger" onclick="App.deleteFile('${this.escAttr(item.path)}')">${this.icons.trash} Delete</div>`;
+            }
         }
 
         menu.innerHTML = html;
@@ -832,6 +942,524 @@ const App = {
         document.getElementById('modalOverlay').classList.remove('active');
         document.getElementById('modalInput').value = '';
         if (this._modalAbort) { this._modalAbort.abort(); this._modalAbort = null; }
+    },
+
+    // === Reviews ===
+    async loadFileReviews(path) {
+        try {
+            const res = await this.apiFetch(`api.php?action=getReviews&path=${encodeURIComponent(path)}`);
+            const data = await res.json();
+            if (data.success) {
+                const container = document.createElement('div');
+                container.className = 'reviews-section';
+                container.id = 'reviewsSection';
+                const body = document.getElementById('previewBody');
+                // Remove any existing reviews section
+                const existing = document.getElementById('reviewsSection');
+                if (existing) existing.remove();
+                body.appendChild(container);
+                this.renderReviews(container, data.reviews || [], path);
+            }
+        } catch (e) {
+            // Silently fail - reviews are supplemental
+        }
+    },
+
+    renderReviews(container, reviews, path) {
+        let html = `<div style="border-top:1px solid var(--border-color, #e2e8f0);margin-top:16px;padding-top:16px;">`;
+        html += `<h4 style="margin:0 0 12px 0;font-size:14px;font-weight:600;display:flex;align-items:center;gap:6px;">${this.icons.comment} Reviews (${reviews.length})</h4>`;
+
+        if (reviews.length > 0) {
+            html += `<div style="display:flex;flex-direction:column;gap:8px;margin-bottom:16px;">`;
+            reviews.forEach(r => {
+                const isResolved = !!r.resolved;
+                const isApproval = r.type === 'approval';
+                const resolvedStyle = isResolved ? 'opacity:0.5;text-decoration:line-through;' : '';
+                const dateStr = r.created_at ? this.formatDate(r.created_at) : '';
+
+                html += `<div style="padding:10px 12px;border-radius:8px;background:var(--bg-secondary, #f8fafc);border:1px solid var(--border-color, #e2e8f0);${resolvedStyle}">`;
+                html += `<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px;">`;
+                html += `<div style="display:flex;align-items:center;gap:6px;">`;
+                html += `<strong style="font-size:13px;">${this.escHtml(r.display_name || r.username || 'Unknown')}</strong>`;
+                if (isApproval) {
+                    html += `<span style="display:inline-flex;align-items:center;gap:3px;background:#22c55e;color:#fff;font-size:11px;padding:1px 7px;border-radius:10px;font-weight:600;">${this.icons.check} Approved</span>`;
+                }
+                if (isResolved) {
+                    html += `<span style="font-size:11px;color:var(--text-muted, #94a3b8);">resolved</span>`;
+                }
+                html += `<span style="font-size:11px;color:var(--text-muted, #94a3b8);">${this.escHtml(dateStr)}</span>`;
+                html += `</div>`;
+
+                // Admin actions
+                if (this.isAdmin()) {
+                    html += `<div style="display:flex;gap:4px;">`;
+                    html += `<button class="btn btn-sm btn-ghost" style="font-size:11px;padding:2px 6px;" onclick="App.toggleResolve('${this.escAttr(String(r.id))}', '${this.escAttr(path)}')">${isResolved ? 'Unresolve' : 'Resolve'}</button>`;
+                    html += `<button class="btn btn-sm btn-ghost" style="font-size:11px;padding:2px 6px;color:#ef4444;" onclick="App.deleteReviewItem('${this.escAttr(String(r.id))}', '${this.escAttr(path)}')">${this.icons.trash}</button>`;
+                    html += `</div>`;
+                }
+
+                html += `</div>`;
+                if (r.text) {
+                    html += `<div style="font-size:13px;color:var(--text-primary, #334155);white-space:pre-wrap;">${this.escHtml(r.text)}</div>`;
+                }
+                html += `</div>`;
+            });
+            html += `</div>`;
+        }
+
+        // Add review form
+        if (this.canDo('can_review') || this.isAdmin()) {
+            html += `<div style="margin-top:8px;">`;
+            html += `<textarea id="reviewTextarea" placeholder="Write a comment..." style="width:100%;min-height:60px;padding:8px 10px;border:1px solid var(--border-color, #e2e8f0);border-radius:8px;font-size:13px;font-family:inherit;resize:vertical;background:var(--bg-primary, #fff);color:var(--text-primary, #334155);box-sizing:border-box;"></textarea>`;
+            html += `<div style="display:flex;gap:8px;margin-top:8px;">`;
+            html += `<button class="btn btn-sm btn-primary" onclick="App.submitComment('${this.escAttr(path)}')">${this.icons.comment} Send Comment</button>`;
+            html += `<button class="btn btn-sm" style="background:#22c55e;color:#fff;border:none;" onclick="App.approveFile('${this.escAttr(path)}')">${this.icons.check} Approve File</button>`;
+            html += `</div>`;
+            html += `</div>`;
+        }
+
+        html += `</div>`;
+        container.innerHTML = html;
+    },
+
+    async submitComment(path) {
+        const textarea = document.getElementById('reviewTextarea');
+        if (!textarea) return;
+        const text = textarea.value.trim();
+        if (!text) {
+            this.toast('Please enter a comment', 'error');
+            return;
+        }
+        try {
+            const res = await this.apiFetch('api.php', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ action: 'addReview', path, type: 'comment', text })
+            });
+            const data = await res.json();
+            if (data.success) {
+                this.toast('Comment added', 'success');
+                this.loadFileReviews(path);
+            } else {
+                this.toast('Failed: ' + (data.error || ''), 'error');
+            }
+        } catch (e) {
+            this.toast('Error: ' + e.message, 'error');
+        }
+    },
+
+    async approveFile(path) {
+        try {
+            const res = await this.apiFetch('api.php', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ action: 'addReview', path, type: 'approval', text: '' })
+            });
+            const data = await res.json();
+            if (data.success) {
+                this.toast('File approved', 'success');
+                this.loadFileReviews(path);
+            } else {
+                this.toast('Failed: ' + (data.error || ''), 'error');
+            }
+        } catch (e) {
+            this.toast('Error: ' + e.message, 'error');
+        }
+    },
+
+    async toggleResolve(reviewId, path) {
+        try {
+            const res = await this.apiFetch('api.php', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ action: 'resolveReview', id: reviewId })
+            });
+            const data = await res.json();
+            if (data.success) {
+                this.loadFileReviews(path);
+            } else {
+                this.toast('Failed: ' + (data.error || ''), 'error');
+            }
+        } catch (e) {
+            this.toast('Error: ' + e.message, 'error');
+        }
+    },
+
+    async deleteReviewItem(reviewId, path) {
+        if (!confirm('Delete this review?')) return;
+        try {
+            const res = await this.apiFetch('api.php', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ action: 'deleteReview', id: reviewId })
+            });
+            const data = await res.json();
+            if (data.success) {
+                this.toast('Review deleted', 'success');
+                this.loadFileReviews(path);
+            } else {
+                this.toast('Failed: ' + (data.error || ''), 'error');
+            }
+        } catch (e) {
+            this.toast('Error: ' + e.message, 'error');
+        }
+    },
+
+    // === User Management ===
+    async showUsersPanel() {
+        if (!this.isAdmin()) {
+            this.toast('Admin access required', 'error');
+            return;
+        }
+        try {
+            const res = await this.apiFetch('api.php?action=getUsers');
+            const data = await res.json();
+            if (!data.success) {
+                this.toast('Failed to load users: ' + (data.error || ''), 'error');
+                return;
+            }
+            const users = data.users || [];
+            this._renderUsersPanel(users);
+        } catch (e) {
+            this.toast('Error: ' + e.message, 'error');
+        }
+    },
+
+    _renderUsersPanel(users) {
+        // Remove existing panel
+        const existing = document.getElementById('usersPanelOverlay');
+        if (existing) existing.remove();
+
+        const overlay = document.createElement('div');
+        overlay.id = 'usersPanelOverlay';
+        overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:1000;display:flex;align-items:center;justify-content:center;padding:20px;';
+
+        let tableRows = '';
+        users.forEach(u => {
+            const perms = u.permissions || {};
+            const allowedPaths = Array.isArray(perms.allowed_paths) ? perms.allowed_paths.join(', ') : (perms.allowed_paths || '*');
+            const uJson = this.escAttr(JSON.stringify(u));
+            tableRows += `<tr>
+                <td style="padding:8px 12px;border-bottom:1px solid var(--border-color, #e2e8f0);">${this.escHtml(u.username)}</td>
+                <td style="padding:8px 12px;border-bottom:1px solid var(--border-color, #e2e8f0);">${this.escHtml(u.display_name || '')}</td>
+                <td style="padding:8px 12px;border-bottom:1px solid var(--border-color, #e2e8f0);"><span class="user-badge ${this.escAttr(u.role)}" style="font-size:11px;padding:2px 8px;border-radius:10px;">${this.escHtml(u.role)}</span></td>
+                <td style="padding:8px 12px;border-bottom:1px solid var(--border-color, #e2e8f0);font-size:12px;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${this.escAttr(allowedPaths)}">${this.escHtml(allowedPaths)}</td>
+                <td style="padding:8px 12px;border-bottom:1px solid var(--border-color, #e2e8f0);">
+                    <div style="display:flex;gap:4px;">
+                        <button class="btn btn-sm btn-ghost" onclick="App.showEditUserModal(${uJson})" title="Edit">${this.icons.edit}</button>
+                        <button class="btn btn-sm btn-ghost" onclick="App.showChangePasswordModal('${this.escAttr(u.username)}')" title="Change Password">${this.icons.key}</button>
+                        <button class="btn btn-sm btn-ghost" style="color:#ef4444;" onclick="App.deleteUserItem('${this.escAttr(u.username)}')" title="Delete">${this.icons.trash}</button>
+                    </div>
+                </td>
+            </tr>`;
+        });
+
+        overlay.innerHTML = `
+            <div style="background:var(--bg-primary, #fff);border-radius:12px;max-width:900px;width:100%;max-height:90vh;display:flex;flex-direction:column;box-shadow:0 25px 50px -12px rgba(0,0,0,0.25);">
+                <div style="display:flex;align-items:center;justify-content:space-between;padding:16px 20px;border-bottom:1px solid var(--border-color, #e2e8f0);">
+                    <h3 style="margin:0;font-size:16px;font-weight:600;display:flex;align-items:center;gap:8px;">${this.icons.users} User Management</h3>
+                    <div style="display:flex;gap:8px;">
+                        <button class="btn btn-sm btn-primary" onclick="App.showAddUserModal()">+ Add User</button>
+                        <button class="btn btn-sm btn-ghost" onclick="document.getElementById('usersPanelOverlay').remove()">${this.icons.close}</button>
+                    </div>
+                </div>
+                <div style="overflow:auto;padding:0;">
+                    <table style="width:100%;border-collapse:collapse;">
+                        <thead>
+                            <tr style="background:var(--bg-secondary, #f8fafc);">
+                                <th style="padding:10px 12px;text-align:left;font-size:12px;font-weight:600;text-transform:uppercase;color:var(--text-muted, #94a3b8);">Username</th>
+                                <th style="padding:10px 12px;text-align:left;font-size:12px;font-weight:600;text-transform:uppercase;color:var(--text-muted, #94a3b8);">Display Name</th>
+                                <th style="padding:10px 12px;text-align:left;font-size:12px;font-weight:600;text-transform:uppercase;color:var(--text-muted, #94a3b8);">Role</th>
+                                <th style="padding:10px 12px;text-align:left;font-size:12px;font-weight:600;text-transform:uppercase;color:var(--text-muted, #94a3b8);">Allowed Paths</th>
+                                <th style="padding:10px 12px;text-align:left;font-size:12px;font-weight:600;text-transform:uppercase;color:var(--text-muted, #94a3b8);">Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody>${tableRows}</tbody>
+                    </table>
+                    ${users.length === 0 ? '<div style="padding:40px;text-align:center;color:var(--text-muted, #94a3b8);">No users found</div>' : ''}
+                </div>
+            </div>
+        `;
+
+        document.body.appendChild(overlay);
+
+        // Close on overlay click
+        overlay.addEventListener('click', (e) => {
+            if (e.target === overlay) overlay.remove();
+        });
+    },
+
+    showAddUserModal() {
+        const existing = document.getElementById('userFormOverlay');
+        if (existing) existing.remove();
+
+        const overlay = document.createElement('div');
+        overlay.id = 'userFormOverlay';
+        overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:1100;display:flex;align-items:center;justify-content:center;padding:20px;';
+
+        overlay.innerHTML = `
+            <div style="background:var(--bg-primary, #fff);border-radius:12px;max-width:500px;width:100%;max-height:90vh;overflow:auto;box-shadow:0 25px 50px -12px rgba(0,0,0,0.25);">
+                <div style="display:flex;align-items:center;justify-content:space-between;padding:16px 20px;border-bottom:1px solid var(--border-color, #e2e8f0);">
+                    <h3 style="margin:0;font-size:16px;font-weight:600;">Add User</h3>
+                    <button class="btn btn-sm btn-ghost" onclick="document.getElementById('userFormOverlay').remove()">${this.icons.close}</button>
+                </div>
+                <div style="padding:20px;display:flex;flex-direction:column;gap:12px;">
+                    <div>
+                        <label style="display:block;font-size:12px;font-weight:600;margin-bottom:4px;">Username</label>
+                        <input type="text" id="uf_username" style="width:100%;padding:8px 10px;border:1px solid var(--border-color, #e2e8f0);border-radius:6px;font-size:13px;box-sizing:border-box;" />
+                    </div>
+                    <div>
+                        <label style="display:block;font-size:12px;font-weight:600;margin-bottom:4px;">Display Name</label>
+                        <input type="text" id="uf_displayname" style="width:100%;padding:8px 10px;border:1px solid var(--border-color, #e2e8f0);border-radius:6px;font-size:13px;box-sizing:border-box;" />
+                    </div>
+                    <div>
+                        <label style="display:block;font-size:12px;font-weight:600;margin-bottom:4px;">Password</label>
+                        <input type="password" id="uf_password" style="width:100%;padding:8px 10px;border:1px solid var(--border-color, #e2e8f0);border-radius:6px;font-size:13px;box-sizing:border-box;" />
+                    </div>
+                    <div>
+                        <label style="display:block;font-size:12px;font-weight:600;margin-bottom:4px;">Role</label>
+                        <select id="uf_role" style="width:100%;padding:8px 10px;border:1px solid var(--border-color, #e2e8f0);border-radius:6px;font-size:13px;box-sizing:border-box;">
+                            <option value="client">Client</option>
+                            <option value="admin">Admin</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label style="display:block;font-size:12px;font-weight:600;margin-bottom:4px;">Allowed Paths (comma-separated, or * for all)</label>
+                        <textarea id="uf_paths" style="width:100%;padding:8px 10px;border:1px solid var(--border-color, #e2e8f0);border-radius:6px;font-size:13px;min-height:40px;box-sizing:border-box;">*</textarea>
+                    </div>
+                    <div style="display:flex;flex-wrap:wrap;gap:12px;">
+                        <label style="display:flex;align-items:center;gap:4px;font-size:13px;"><input type="checkbox" id="uf_can_upload" checked /> Upload</label>
+                        <label style="display:flex;align-items:center;gap:4px;font-size:13px;"><input type="checkbox" id="uf_can_edit" checked /> Edit</label>
+                        <label style="display:flex;align-items:center;gap:4px;font-size:13px;"><input type="checkbox" id="uf_can_delete" checked /> Delete</label>
+                        <label style="display:flex;align-items:center;gap:4px;font-size:13px;"><input type="checkbox" id="uf_can_download" checked /> Download</label>
+                        <label style="display:flex;align-items:center;gap:4px;font-size:13px;"><input type="checkbox" id="uf_can_create_folder" checked /> Create Folder</label>
+                        <label style="display:flex;align-items:center;gap:4px;font-size:13px;"><input type="checkbox" id="uf_can_review" checked /> Review</label>
+                    </div>
+                    <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:8px;">
+                        <button class="btn btn-sm" onclick="document.getElementById('userFormOverlay').remove()">Cancel</button>
+                        <button class="btn btn-sm btn-primary" onclick="App._submitAddUser()">Add User</button>
+                    </div>
+                </div>
+            </div>
+        `;
+
+        document.body.appendChild(overlay);
+        overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
+    },
+
+    async _submitAddUser() {
+        const username = document.getElementById('uf_username').value.trim();
+        const display_name = document.getElementById('uf_displayname').value.trim();
+        const password = document.getElementById('uf_password').value;
+        const role = document.getElementById('uf_role').value;
+        const pathsRaw = document.getElementById('uf_paths').value.trim();
+
+        if (!username || !password || !display_name) {
+            this.toast('Username, display name, and password are required', 'error');
+            return;
+        }
+
+        const allowed_paths = pathsRaw === '*' ? ['*'] : pathsRaw.split(',').map(p => p.trim()).filter(Boolean);
+
+        const permissions = {
+            can_upload: document.getElementById('uf_can_upload').checked,
+            can_edit: document.getElementById('uf_can_edit').checked,
+            can_delete: document.getElementById('uf_can_delete').checked,
+            can_download: document.getElementById('uf_can_download').checked,
+            can_create_folder: document.getElementById('uf_can_create_folder').checked,
+            can_review: document.getElementById('uf_can_review').checked,
+            allowed_paths: allowed_paths
+        };
+
+        try {
+            const res = await this.apiFetch('api.php', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ action: 'addUser', username, password, role, display_name, permissions })
+            });
+            const data = await res.json();
+            if (data.success) {
+                this.toast('User created', 'success');
+                const formOverlay = document.getElementById('userFormOverlay');
+                if (formOverlay) formOverlay.remove();
+                this.showUsersPanel();
+            } else {
+                this.toast('Failed: ' + (data.error || ''), 'error');
+            }
+        } catch (e) {
+            this.toast('Error: ' + e.message, 'error');
+        }
+    },
+
+    showEditUserModal(user) {
+        const existing = document.getElementById('userFormOverlay');
+        if (existing) existing.remove();
+
+        const perms = user.permissions || {};
+        const allowedPaths = Array.isArray(perms.allowed_paths) ? perms.allowed_paths.join(', ') : (perms.allowed_paths || '*');
+
+        const overlay = document.createElement('div');
+        overlay.id = 'userFormOverlay';
+        overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:1100;display:flex;align-items:center;justify-content:center;padding:20px;';
+
+        overlay.innerHTML = `
+            <div style="background:var(--bg-primary, #fff);border-radius:12px;max-width:500px;width:100%;max-height:90vh;overflow:auto;box-shadow:0 25px 50px -12px rgba(0,0,0,0.25);">
+                <div style="display:flex;align-items:center;justify-content:space-between;padding:16px 20px;border-bottom:1px solid var(--border-color, #e2e8f0);">
+                    <h3 style="margin:0;font-size:16px;font-weight:600;">Edit User: ${this.escHtml(user.username)}</h3>
+                    <button class="btn btn-sm btn-ghost" onclick="document.getElementById('userFormOverlay').remove()">${this.icons.close}</button>
+                </div>
+                <div style="padding:20px;display:flex;flex-direction:column;gap:12px;">
+                    <div>
+                        <label style="display:block;font-size:12px;font-weight:600;margin-bottom:4px;">Username</label>
+                        <input type="text" id="uf_username" value="${this.escAttr(user.username)}" readonly style="width:100%;padding:8px 10px;border:1px solid var(--border-color, #e2e8f0);border-radius:6px;font-size:13px;background:var(--bg-secondary, #f8fafc);box-sizing:border-box;" />
+                    </div>
+                    <div>
+                        <label style="display:block;font-size:12px;font-weight:600;margin-bottom:4px;">Display Name</label>
+                        <input type="text" id="uf_displayname" value="${this.escAttr(user.display_name || '')}" style="width:100%;padding:8px 10px;border:1px solid var(--border-color, #e2e8f0);border-radius:6px;font-size:13px;box-sizing:border-box;" />
+                    </div>
+                    <div>
+                        <label style="display:block;font-size:12px;font-weight:600;margin-bottom:4px;">Role</label>
+                        <select id="uf_role" style="width:100%;padding:8px 10px;border:1px solid var(--border-color, #e2e8f0);border-radius:6px;font-size:13px;box-sizing:border-box;">
+                            <option value="client" ${user.role === 'client' ? 'selected' : ''}>Client</option>
+                            <option value="admin" ${user.role === 'admin' ? 'selected' : ''}>Admin</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label style="display:block;font-size:12px;font-weight:600;margin-bottom:4px;">Allowed Paths (comma-separated, or * for all)</label>
+                        <textarea id="uf_paths" style="width:100%;padding:8px 10px;border:1px solid var(--border-color, #e2e8f0);border-radius:6px;font-size:13px;min-height:40px;box-sizing:border-box;">${this.escHtml(allowedPaths)}</textarea>
+                    </div>
+                    <div style="display:flex;flex-wrap:wrap;gap:12px;">
+                        <label style="display:flex;align-items:center;gap:4px;font-size:13px;"><input type="checkbox" id="uf_can_upload" ${perms.can_upload ? 'checked' : ''} /> Upload</label>
+                        <label style="display:flex;align-items:center;gap:4px;font-size:13px;"><input type="checkbox" id="uf_can_edit" ${perms.can_edit ? 'checked' : ''} /> Edit</label>
+                        <label style="display:flex;align-items:center;gap:4px;font-size:13px;"><input type="checkbox" id="uf_can_delete" ${perms.can_delete ? 'checked' : ''} /> Delete</label>
+                        <label style="display:flex;align-items:center;gap:4px;font-size:13px;"><input type="checkbox" id="uf_can_download" ${perms.can_download ? 'checked' : ''} /> Download</label>
+                        <label style="display:flex;align-items:center;gap:4px;font-size:13px;"><input type="checkbox" id="uf_can_create_folder" ${perms.can_create_folder ? 'checked' : ''} /> Create Folder</label>
+                        <label style="display:flex;align-items:center;gap:4px;font-size:13px;"><input type="checkbox" id="uf_can_review" ${perms.can_review ? 'checked' : ''} /> Review</label>
+                    </div>
+                    <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:8px;">
+                        <button class="btn btn-sm" onclick="document.getElementById('userFormOverlay').remove()">Cancel</button>
+                        <button class="btn btn-sm btn-primary" onclick="App._submitEditUser('${this.escAttr(user.username)}')">Save Changes</button>
+                    </div>
+                </div>
+            </div>
+        `;
+
+        document.body.appendChild(overlay);
+        overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
+    },
+
+    async _submitEditUser(username) {
+        const display_name = document.getElementById('uf_displayname').value.trim();
+        const role = document.getElementById('uf_role').value;
+        const pathsRaw = document.getElementById('uf_paths').value.trim();
+
+        const allowed_paths = pathsRaw === '*' ? ['*'] : pathsRaw.split(',').map(p => p.trim()).filter(Boolean);
+
+        const permissions = {
+            can_upload: document.getElementById('uf_can_upload').checked,
+            can_edit: document.getElementById('uf_can_edit').checked,
+            can_delete: document.getElementById('uf_can_delete').checked,
+            can_download: document.getElementById('uf_can_download').checked,
+            can_create_folder: document.getElementById('uf_can_create_folder').checked,
+            can_review: document.getElementById('uf_can_review').checked,
+            allowed_paths: allowed_paths
+        };
+
+        try {
+            const res = await this.apiFetch('api.php', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ action: 'updateUser', username, role, display_name, permissions })
+            });
+            const data = await res.json();
+            if (data.success) {
+                this.toast('User updated', 'success');
+                const formOverlay = document.getElementById('userFormOverlay');
+                if (formOverlay) formOverlay.remove();
+                this.showUsersPanel();
+            } else {
+                this.toast('Failed: ' + (data.error || ''), 'error');
+            }
+        } catch (e) {
+            this.toast('Error: ' + e.message, 'error');
+        }
+    },
+
+    showChangePasswordModal(username) {
+        const existing = document.getElementById('userFormOverlay');
+        if (existing) existing.remove();
+
+        const overlay = document.createElement('div');
+        overlay.id = 'userFormOverlay';
+        overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:1100;display:flex;align-items:center;justify-content:center;padding:20px;';
+
+        overlay.innerHTML = `
+            <div style="background:var(--bg-primary, #fff);border-radius:12px;max-width:400px;width:100%;box-shadow:0 25px 50px -12px rgba(0,0,0,0.25);">
+                <div style="display:flex;align-items:center;justify-content:space-between;padding:16px 20px;border-bottom:1px solid var(--border-color, #e2e8f0);">
+                    <h3 style="margin:0;font-size:16px;font-weight:600;display:flex;align-items:center;gap:8px;">${this.icons.key} Change Password</h3>
+                    <button class="btn btn-sm btn-ghost" onclick="document.getElementById('userFormOverlay').remove()">${this.icons.close}</button>
+                </div>
+                <div style="padding:20px;display:flex;flex-direction:column;gap:12px;">
+                    <p style="margin:0;font-size:13px;color:var(--text-muted, #94a3b8);">Changing password for <strong>${this.escHtml(username)}</strong></p>
+                    <div>
+                        <label style="display:block;font-size:12px;font-weight:600;margin-bottom:4px;">New Password</label>
+                        <input type="password" id="uf_newpassword" style="width:100%;padding:8px 10px;border:1px solid var(--border-color, #e2e8f0);border-radius:6px;font-size:13px;box-sizing:border-box;" />
+                    </div>
+                    <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:8px;">
+                        <button class="btn btn-sm" onclick="document.getElementById('userFormOverlay').remove()">Cancel</button>
+                        <button class="btn btn-sm btn-primary" onclick="App._submitChangePassword('${this.escAttr(username)}')">Change Password</button>
+                    </div>
+                </div>
+            </div>
+        `;
+
+        document.body.appendChild(overlay);
+        overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
+    },
+
+    async _submitChangePassword(username) {
+        const password = document.getElementById('uf_newpassword').value;
+        if (!password) {
+            this.toast('Password is required', 'error');
+            return;
+        }
+        try {
+            const res = await this.apiFetch('api.php', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ action: 'changePassword', username, password })
+            });
+            const data = await res.json();
+            if (data.success) {
+                this.toast('Password changed', 'success');
+                const formOverlay = document.getElementById('userFormOverlay');
+                if (formOverlay) formOverlay.remove();
+            } else {
+                this.toast('Failed: ' + (data.error || ''), 'error');
+            }
+        } catch (e) {
+            this.toast('Error: ' + e.message, 'error');
+        }
+    },
+
+    async deleteUserItem(username) {
+        if (!confirm(`Delete user "${username}"? This cannot be undone.`)) return;
+        try {
+            const res = await this.apiFetch('api.php', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ action: 'deleteUser', username })
+            });
+            const data = await res.json();
+            if (data.success) {
+                this.toast('User deleted', 'success');
+                this.showUsersPanel();
+            } else {
+                this.toast('Failed: ' + (data.error || ''), 'error');
+            }
+        } catch (e) {
+            this.toast('Error: ' + e.message, 'error');
+        }
     },
 
     // === Helpers ===
