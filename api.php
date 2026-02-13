@@ -1,8 +1,10 @@
 <?php
 /**
  * API Handler for Supabase Storage operations
+ * With Authentication, RBAC, and Review System
  */
 require_once 'config.php';
+require_once 'auth.php';
 
 header('Content-Type: application/json; charset=utf-8');
 header('X-Content-Type-Options: nosniff');
@@ -132,7 +134,6 @@ function uploadFile(string $prefix, array $file): array {
     $filePath = $prefix ? $prefix . '/' . $file['name'] : $file['name'];
     $endpoint = '/object/' . SUPABASE_BUCKET . '/' . rawurlencode($filePath);
 
-    // Detect mime type
     $finfo = finfo_open(FILEINFO_MIME_TYPE);
     $mimeType = finfo_file($finfo, $file['tmp_name']);
     finfo_close($finfo);
@@ -206,6 +207,8 @@ function renameFile(string $oldPath, string $newPath): array {
     $result = supabaseRequest('POST', '/object/move', $body);
 
     if ($result['httpCode'] === 200) {
+        // Update review paths
+        updateReviewPaths($oldPath, $newPath);
         return ['success' => true];
     }
 
@@ -303,27 +306,84 @@ function getSignedUrl(string $filePath): string {
     if ($result['httpCode'] === 200 && isset($result['data']['signedURL'])) {
         return SUPABASE_URL . '/storage/v1' . $result['data']['signedURL'];
     }
-    // Fallback to public URL
     return getPublicUrl($filePath);
 }
 
 // Route API actions
 $action = $_GET['action'] ?? $_POST['action'] ?? '';
 
+// Actions that don't require authentication
+$publicActions = ['login', 'logout', 'session'];
+
+if (!in_array($action, $publicActions)) {
+    requireAuth();
+}
+
 switch ($action) {
+
+    // === Authentication ===
+
+    case 'login':
+        $input = json_decode(file_get_contents('php://input'), true);
+        $username = trim($input['username'] ?? '');
+        $password = $input['password'] ?? '';
+        if (!$username || !$password) {
+            echo json_encode(['success' => false, 'error' => 'Username and password required']);
+            break;
+        }
+        usleep(200000); // 200ms delay for brute force protection
+        echo json_encode(attemptLogin($username, $password));
+        break;
+
+    case 'logout':
+        logout();
+        echo json_encode(['success' => true]);
+        break;
+
+    case 'session':
+        if (isLoggedIn()) {
+            echo json_encode(['success' => true, 'authenticated' => true, 'user' => sessionUserInfo()]);
+        } else {
+            echo json_encode(['success' => true, 'authenticated' => false]);
+        }
+        break;
+
+    // === File Operations ===
+
     case 'list':
         $prefix = sanitizePath($_GET['prefix'] ?? '');
-        echo json_encode(listFiles($prefix));
+        if (!canAccessPath($prefix)) {
+            echo json_encode(['success' => false, 'error' => 'Access denied']);
+            break;
+        }
+        $result = listFiles($prefix);
+        // Filter results for non-admin users
+        if (!isAdmin() && $result['success']) {
+            $result['folders'] = array_values(array_filter($result['folders'], function($f) {
+                return canAccessPath($f['path']);
+            }));
+            $result['files'] = array_values(array_filter($result['files'], function($f) {
+                return isPathDirectlyAllowed($f['path']);
+            }));
+        }
+        echo json_encode($result);
         break;
 
     case 'upload':
+        if (!hasPermission('can_upload')) {
+            echo json_encode(['success' => false, 'error' => 'Upload not permitted']);
+            break;
+        }
         if (!isset($_FILES['file'])) {
             echo json_encode(['success' => false, 'error' => 'No file provided']);
             break;
         }
         $prefix = sanitizePath($_POST['prefix'] ?? '');
+        if (!canAccessPath($prefix)) {
+            echo json_encode(['success' => false, 'error' => 'Access denied to this path']);
+            break;
+        }
 
-        // Handle multiple files
         if (is_array($_FILES['file']['name'])) {
             $results = [];
             for ($i = 0; $i < count($_FILES['file']['name']); $i++) {
@@ -342,19 +402,35 @@ switch ($action) {
         break;
 
     case 'delete':
+        if (!hasPermission('can_delete')) {
+            echo json_encode(['success' => false, 'error' => 'Delete not permitted']);
+            break;
+        }
         $path = sanitizePath($_POST['path'] ?? '');
         if (!$path) {
             echo json_encode(['success' => false, 'error' => 'No path provided']);
+            break;
+        }
+        if (!canAccessPath($path)) {
+            echo json_encode(['success' => false, 'error' => 'Access denied']);
             break;
         }
         echo json_encode(deleteFile($path));
         break;
 
     case 'rename':
+        if (!hasPermission('can_edit')) {
+            echo json_encode(['success' => false, 'error' => 'Edit not permitted']);
+            break;
+        }
         $oldPath = sanitizePath($_POST['oldPath'] ?? '');
         $newPath = sanitizePath($_POST['newPath'] ?? '');
         if (!$oldPath || !$newPath) {
             echo json_encode(['success' => false, 'error' => 'Paths required']);
+            break;
+        }
+        if (!canAccessPath($oldPath) || !canAccessPath($newPath)) {
+            echo json_encode(['success' => false, 'error' => 'Access denied']);
             break;
         }
         echo json_encode(renameFile($oldPath, $newPath));
@@ -366,6 +442,10 @@ switch ($action) {
             echo json_encode(['success' => false, 'error' => 'No path provided']);
             break;
         }
+        if (!canAccessPath($path)) {
+            echo json_encode(['success' => false, 'error' => 'Access denied']);
+            break;
+        }
         $result = getFileContent($path);
         if ($result['success']) {
             echo json_encode(['success' => true, 'content' => $result['content'], 'contentType' => $result['contentType']]);
@@ -375,6 +455,10 @@ switch ($action) {
         break;
 
     case 'save':
+        if (!hasPermission('can_edit')) {
+            echo json_encode(['success' => false, 'error' => 'Edit not permitted']);
+            break;
+        }
         $path = sanitizePath($_POST['path'] ?? '');
         $content = $_POST['content'] ?? '';
         $mimeType = $_POST['mimeType'] ?? 'text/plain';
@@ -382,26 +466,42 @@ switch ($action) {
             echo json_encode(['success' => false, 'error' => 'No path provided']);
             break;
         }
+        if (!canAccessPath($path)) {
+            echo json_encode(['success' => false, 'error' => 'Access denied']);
+            break;
+        }
         echo json_encode(saveFileContent($path, $content, $mimeType));
         break;
 
     case 'createFolder':
+        if (!hasPermission('can_create_folder')) {
+            echo json_encode(['success' => false, 'error' => 'Folder creation not permitted']);
+            break;
+        }
         $prefix = sanitizePath($_POST['prefix'] ?? '');
         $folderName = sanitizePath($_POST['folderName'] ?? '');
         if (!$folderName) {
             echo json_encode(['success' => false, 'error' => 'Folder name required']);
             break;
         }
+        if (!canAccessPath($prefix)) {
+            echo json_encode(['success' => false, 'error' => 'Access denied']);
+            break;
+        }
         echo json_encode(createFolder($prefix, $folderName));
         break;
 
     case 'proxy':
-        // Proxy raw binary file (for DOCX preview with mammoth.js)
         $path = sanitizePath($_GET['path'] ?? '');
         if (!$path) {
             http_response_code(400);
             echo 'No path provided';
             break;
+        }
+        if (!canAccessPath($path)) {
+            http_response_code(403);
+            echo 'Access denied';
+            exit;
         }
         $result = getFileContent($path);
         if ($result['success']) {
@@ -416,7 +516,6 @@ switch ($action) {
             header_remove('Content-Type');
             header('Content-Type: ' . $mime);
             header('Content-Length: ' . strlen($result['content']));
-            // CORS restricted to same-origin requests
             echo $result['content'];
         } else {
             http_response_code(404);
@@ -430,6 +529,16 @@ switch ($action) {
             http_response_code(400);
             echo 'No path provided';
             break;
+        }
+        if (!canAccessPath($path)) {
+            http_response_code(403);
+            echo 'Access denied';
+            exit;
+        }
+        if (!hasPermission('can_download')) {
+            http_response_code(403);
+            echo 'Download not permitted';
+            exit;
         }
         $result = getFileContent($path);
         if ($result['success']) {
@@ -448,10 +557,18 @@ switch ($action) {
 
     case 'publicUrl':
         $path = sanitizePath($_GET['path'] ?? '');
+        if (!canAccessPath($path)) {
+            echo json_encode(['success' => false, 'error' => 'Access denied']);
+            break;
+        }
         echo json_encode(['success' => true, 'url' => getPublicUrl($path)]);
         break;
 
     case 'deleteBatch':
+        if (!hasPermission('can_delete')) {
+            echo json_encode(['success' => false, 'error' => 'Delete not permitted']);
+            break;
+        }
         $paths = json_decode($_POST['paths'] ?? '[]', true);
         if (!is_array($paths) || count($paths) === 0) {
             echo json_encode(['success' => false, 'error' => 'No paths provided']);
@@ -460,11 +577,153 @@ switch ($action) {
         $results = [];
         foreach ($paths as $p) {
             $safePath = sanitizePath($p);
-            if ($safePath) {
+            if ($safePath && canAccessPath($safePath)) {
                 $results[] = array_merge(deleteFile($safePath), ['path' => $safePath]);
             }
         }
         echo json_encode(['success' => true, 'results' => $results]);
+        break;
+
+    // === Reviews ===
+
+    case 'getReviews':
+        $path = sanitizePath($_GET['path'] ?? '');
+        if (!$path || !canAccessPath($path)) {
+            echo json_encode(['success' => false, 'error' => 'Access denied']);
+            break;
+        }
+        $reviews = getFileReviews($path);
+        echo json_encode(['success' => true, 'reviews' => $reviews]);
+        break;
+
+    case 'addReview':
+        if (!hasPermission('can_review') && !isAdmin()) {
+            echo json_encode(['success' => false, 'error' => 'Review not permitted']);
+            break;
+        }
+        $input = json_decode(file_get_contents('php://input'), true);
+        $path = sanitizePath($input['path'] ?? '');
+        $type = $input['type'] ?? 'comment';
+        $text = trim($input['text'] ?? '');
+
+        if (!$path || !canAccessPath($path)) {
+            echo json_encode(['success' => false, 'error' => 'Access denied']);
+            break;
+        }
+        if ($type === 'comment' && $text === '') {
+            echo json_encode(['success' => false, 'error' => 'Comment text required']);
+            break;
+        }
+        if (!in_array($type, ['comment', 'approval'])) {
+            echo json_encode(['success' => false, 'error' => 'Invalid review type']);
+            break;
+        }
+
+        echo json_encode(addReview(['file_path' => $path, 'type' => $type, 'text' => $text]));
+        break;
+
+    case 'resolveReview':
+        if (!isAdmin()) {
+            echo json_encode(['success' => false, 'error' => 'Admin only']);
+            break;
+        }
+        $input = json_decode(file_get_contents('php://input'), true);
+        $reviewId = $input['id'] ?? '';
+        if (!$reviewId) {
+            echo json_encode(['success' => false, 'error' => 'Review ID required']);
+            break;
+        }
+        echo json_encode(toggleResolveReview($reviewId));
+        break;
+
+    case 'deleteReview':
+        if (!isAdmin()) {
+            echo json_encode(['success' => false, 'error' => 'Admin only']);
+            break;
+        }
+        $input = json_decode(file_get_contents('php://input'), true);
+        $reviewId = $input['id'] ?? '';
+        if (!$reviewId) {
+            echo json_encode(['success' => false, 'error' => 'Review ID required']);
+            break;
+        }
+        echo json_encode(deleteReview($reviewId));
+        break;
+
+    // === User Management (Admin only) ===
+
+    case 'getUsers':
+        if (!isAdmin()) {
+            echo json_encode(['success' => false, 'error' => 'Admin only']);
+            break;
+        }
+        echo json_encode(['success' => true, 'users' => getAllUsers()]);
+        break;
+
+    case 'addUser':
+        if (!isAdmin()) {
+            echo json_encode(['success' => false, 'error' => 'Admin only']);
+            break;
+        }
+        $input = json_decode(file_get_contents('php://input'), true);
+        $username = trim($input['username'] ?? '');
+        $password = $input['password'] ?? '';
+        $role = $input['role'] ?? 'client';
+        $displayName = trim($input['display_name'] ?? '');
+        $permissions = $input['permissions'] ?? [];
+
+        if (!$username || !$password || !$displayName) {
+            echo json_encode(['success' => false, 'error' => 'Username, password, and display name required']);
+            break;
+        }
+        if (!in_array($role, ['admin', 'client'])) {
+            echo json_encode(['success' => false, 'error' => 'Invalid role']);
+            break;
+        }
+        echo json_encode(createUser($username, $password, $role, $displayName, $permissions));
+        break;
+
+    case 'updateUser':
+        if (!isAdmin()) {
+            echo json_encode(['success' => false, 'error' => 'Admin only']);
+            break;
+        }
+        $input = json_decode(file_get_contents('php://input'), true);
+        $username = trim($input['username'] ?? '');
+        if (!$username) {
+            echo json_encode(['success' => false, 'error' => 'Username required']);
+            break;
+        }
+        echo json_encode(updateUser($username, $input));
+        break;
+
+    case 'deleteUser':
+        if (!isAdmin()) {
+            echo json_encode(['success' => false, 'error' => 'Admin only']);
+            break;
+        }
+        $input = json_decode(file_get_contents('php://input'), true);
+        $username = trim($input['username'] ?? '');
+        if (!$username) {
+            echo json_encode(['success' => false, 'error' => 'Username required']);
+            break;
+        }
+        echo json_encode(deleteUser($username));
+        break;
+
+    case 'changePassword':
+        if (!isAdmin()) {
+            echo json_encode(['success' => false, 'error' => 'Admin only']);
+            break;
+        }
+        $input = json_decode(file_get_contents('php://input'), true);
+        $username = trim($input['username'] ?? '');
+        $newPassword = $input['password'] ?? '';
+        if (!$username || !$newPassword) {
+            echo json_encode(['success' => false, 'error' => 'Username and password required']);
+            break;
+        }
+        echo json_encode(changeUserPassword($username, $newPassword));
         break;
 
     default:
