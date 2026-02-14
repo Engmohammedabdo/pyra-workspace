@@ -78,6 +78,8 @@ const App = {
     permissions: window.PYRA_CONFIG?.user?.permissions || {},
     _notifCount: 0,
     _notifPollTimer: null,
+    _notifSoundEnabled: localStorage.getItem('pyra-notif-sound') !== 'off',
+    _audioCtx: null,
     _deepSearchAbort: null,
     _currentView: localStorage.getItem('pyra-view') || 'list',
     _currentScreen: 'dashboard',
@@ -3266,6 +3268,69 @@ const App = {
     initNotifications() {
         this.updateNotifBadge();
         this._notifPollTimer = setInterval(() => this.updateNotifBadge(), 30000);
+        document.addEventListener('click', () => this._ensureAudioCtx(), { once: true });
+    },
+
+    _ensureAudioCtx() {
+        if (!this._audioCtx) {
+            this._audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        }
+        if (this._audioCtx.state === 'suspended') this._audioCtx.resume();
+    },
+
+    _playNotifSound(type = 'default') {
+        if (!this._notifSoundEnabled) return;
+        this._ensureAudioCtx();
+        const ctx = this._audioCtx;
+        if (!ctx) return;
+        const now = ctx.currentTime;
+        const master = ctx.createGain();
+        master.connect(ctx.destination);
+        master.gain.setValueAtTime(0.25, now);
+        master.gain.exponentialRampToValueAtTime(0.001, now + 0.8);
+
+        if (type === 'mention') {
+            // Two-tone chime for @mentions
+            [660, 880].forEach((freq, i) => {
+                const osc = ctx.createOscillator();
+                const g = ctx.createGain();
+                osc.type = 'sine';
+                osc.frequency.setValueAtTime(freq, now + i * 0.15);
+                g.gain.setValueAtTime(0.3, now + i * 0.15);
+                g.gain.exponentialRampToValueAtTime(0.001, now + i * 0.15 + 0.4);
+                osc.connect(g).connect(master);
+                osc.start(now + i * 0.15);
+                osc.stop(now + i * 0.15 + 0.4);
+            });
+        } else if (type === 'approval') {
+            // Rising tri-tone for approvals
+            [523, 659, 784].forEach((freq, i) => {
+                const osc = ctx.createOscillator();
+                const g = ctx.createGain();
+                osc.type = 'sine';
+                osc.frequency.setValueAtTime(freq, now + i * 0.12);
+                g.gain.setValueAtTime(0.25, now + i * 0.12);
+                g.gain.exponentialRampToValueAtTime(0.001, now + i * 0.12 + 0.35);
+                osc.connect(g).connect(master);
+                osc.start(now + i * 0.12);
+                osc.stop(now + i * 0.12 + 0.35);
+            });
+        } else {
+            // Default: soft bell ping
+            const osc = ctx.createOscillator();
+            osc.type = 'sine';
+            osc.frequency.setValueAtTime(830, now);
+            osc.frequency.exponentialRampToValueAtTime(580, now + 0.15);
+            osc.connect(master);
+            osc.start(now);
+            osc.stop(now + 0.6);
+        }
+    },
+
+    toggleNotifSound() {
+        this._notifSoundEnabled = !this._notifSoundEnabled;
+        localStorage.setItem('pyra-notif-sound', this._notifSoundEnabled ? 'on' : 'off');
+        this.toast(this._notifSoundEnabled ? 'Notification sound enabled 🔔' : 'Notification sound muted 🔇', 'info');
     },
 
     async updateNotifBadge() {
@@ -3273,11 +3338,16 @@ const App = {
             const res = await this.apiFetch('api.php?action=getUnreadCount');
             const data = await res.json();
             if (data.success) {
+                const prevCount = this._notifCount;
                 this._notifCount = data.count;
                 const badge = document.getElementById('notifBadge');
                 if (badge) {
                     badge.textContent = data.count;
                     badge.style.display = data.count > 0 ? 'flex' : 'none';
+                }
+                // Play sound if new notifications arrived
+                if (data.count > prevCount && prevCount >= 0) {
+                    this._playNotifSound('default');
                 }
             }
         } catch (e) { /* silent */ }
@@ -3317,10 +3387,16 @@ const App = {
                 });
             }
 
+            const soundIcon = this._notifSoundEnabled
+                ? '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/></svg>'
+                : '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><line x1="23" y1="9" x2="17" y2="15"/><line x1="17" y1="9" x2="23" y2="15"/></svg>';
             dropdown.innerHTML = `
                 <div class="notif-dropdown-header">
                     <h3>${this.icons.bell} Notifications</h3>
-                    <button class="btn btn-sm btn-ghost" onclick="App.markAllNotifsRead()">Mark all read</button>
+                    <div class="notif-header-actions">
+                        <button class="btn btn-sm btn-ghost notif-sound-toggle ${this._notifSoundEnabled ? 'on' : 'off'}" onclick="App.toggleNotifSound(); App.showNotificationsPanel(); App.showNotificationsPanel();" title="${this._notifSoundEnabled ? 'Mute sounds' : 'Enable sounds'}">${soundIcon}</button>
+                        <button class="btn btn-sm btn-ghost" onclick="App.markAllNotifsRead()">Mark all read</button>
+                    </div>
                 </div>
                 <div class="notif-dropdown-body">${itemsHtml}</div>`;
 

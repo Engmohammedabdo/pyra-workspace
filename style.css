@@ -2517,6 +2517,18 @@ body::before {
     letter-spacing: -0.01em;
 }
 .notif-dropdown-header h3 svg { width: 15px; height: 15px; color: var(--accent); }
+.notif-header-actions { display: flex; align-items: center; gap: 4px; }
+.notif-sound-toggle {
+    padding: 4px 6px;
+    border-radius: 6px;
+    display: flex;
+    align-items: center;
+    opacity: 0.6;
+    transition: all var(--transition);
+}
+.notif-sound-toggle:hover { opacity: 1; }
+.notif-sound-toggle.on { color: var(--accent); opacity: 0.9; }
+.notif-sound-toggle.off { color: var(--text-muted); }
 .notif-dropdown-body { overflow-y: auto; flex: 1; }
 
 .notif-item {
