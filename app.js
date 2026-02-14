@@ -40,6 +40,8 @@ const App = {
     _notifPollTimer: null,
     _deepSearchAbort: null,
     _currentView: localStorage.getItem('pyra-view') || 'list',
+    _currentScreen: 'dashboard',
+    _dashboardData: null,
 
     icons: {
         folder: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>',
@@ -91,14 +93,231 @@ const App = {
         this.user = window.PYRA_CONFIG.user;
         this.permissions = window.PYRA_CONFIG.user?.permissions || {};
         this.initNotifications();
-        if (this.user && this.user.role !== 'admin' && this.user.permissions?.allowed_paths) {
+        this.showDashboard();
+    },
+
+    async showDashboard() {
+        this._currentScreen = 'dashboard';
+        const grid = document.getElementById('fileGrid');
+        const header = document.querySelector('.file-list-header');
+        if (header) header.style.display = 'none';
+
+        grid.innerHTML = '<div class="dashboard-loading"><div class="spinner"></div> Loading dashboard...</div>';
+
+        // Update breadcrumb
+        const bc = document.getElementById('breadcrumb');
+        if (bc) bc.innerHTML = '<span class="breadcrumb-item">Dashboard</span>';
+
+        try {
+            const res = await this.apiFetch('api.php?action=getDashboard');
+            const json = await res.json();
+            if (json.success) {
+                this._dashboardData = json.data;
+                this._renderDashboard(json.data);
+            } else {
+                grid.innerHTML = '<div class="dashboard-error">Failed to load dashboard</div>';
+            }
+        } catch (e) {
+            grid.innerHTML = '<div class="dashboard-error">Error: ' + this.escHtml(e.message) + '</div>';
+        }
+    },
+
+    _renderDashboard(data) {
+        const grid = document.getElementById('fileGrid');
+        const role = data.role || 'client';
+        let html = '<div class="dashboard-grid">';
+
+        if (role === 'admin') {
+            html += this._renderAdminDashboard(data);
+        } else if (role === 'employee') {
+            html += this._renderEmployeeDashboard(data);
+        } else {
+            html += this._renderClientDashboard(data);
+        }
+
+        html += '</div>';
+        grid.innerHTML = html;
+    },
+
+    _renderAdminDashboard(data) {
+        let html = '';
+
+        // Stats row
+        html += '<div class="dash-card dash-stats-row">';
+        html += '<div class="dash-stat"><span class="dash-stat-num">' + (data.user_count || 0) + '</span><span class="dash-stat-label">Users</span></div>';
+        html += '<div class="dash-stat"><span class="dash-stat-num">' + (data.file_count || 0) + '</span><span class="dash-stat-label">Files Indexed</span></div>';
+        html += '<div class="dash-stat"><span class="dash-stat-num">' + (data.pending_reviews || 0) + '</span><span class="dash-stat-label">Pending Reviews</span></div>';
+        html += '</div>';
+
+        // Quick actions
+        html += '<div class="dash-card">';
+        html += '<div class="dash-card-header">Quick Actions</div>';
+        html += '<div class="dash-quick-actions">';
+        html += '<button class="btn btn-primary btn-sm" onclick="App.showDashboardFiles()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg> Browse Files</button>';
+        html += '<button class="btn btn-sm" onclick="App.showUsersPanel()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/></svg> Manage Users</button>';
+        html += '<button class="btn btn-sm" onclick="App.showTeamsPanel()">Teams</button>';
+        html += '<button class="btn btn-sm" onclick="App.showTrashPanel()">Trash</button>';
+        html += '<button class="btn btn-sm" onclick="App.showActivityPanel()">Activity Log</button>';
+        html += '<button class="btn btn-sm" onclick="App.showSettingsPanel()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg> Settings</button>';
+        html += '</div></div>';
+
+        // Recent activity
+        html += '<div class="dash-card dash-card-wide">';
+        html += '<div class="dash-card-header">Recent Activity</div>';
+        html += '<div class="dash-list">';
+        (data.recent_activity || []).slice(0, 8).forEach(a => {
+            const icon = a.action_type === 'upload' ? '&#128228;' : a.action_type === 'delete' ? '&#128465;' : a.action_type === 'review_added' ? '&#128172;' : '&#128203;';
+            html += '<div class="dash-list-item">';
+            html += '<span class="dash-list-icon">' + icon + '</span>';
+            html += '<span class="dash-list-text"><strong>' + this.escHtml(a.display_name) + '</strong> ' + this.escHtml(a.action_type.replace(/_/g, ' ')) + '</span>';
+            html += '<span class="dash-list-meta">' + this.formatDate(a.created_at) + '</span>';
+            html += '</div>';
+        });
+        if (!data.recent_activity || data.recent_activity.length === 0) {
+            html += '<div class="dash-empty">No recent activity</div>';
+        }
+        html += '</div></div>';
+
+        return html;
+    },
+
+    _renderEmployeeDashboard(data) {
+        let html = '';
+
+        // My folders
+        html += '<div class="dash-card">';
+        html += '<div class="dash-card-header">My Folders</div>';
+        html += '<div class="dash-list">';
+        const folders = data.my_folders || [];
+        if (folders.length === 0 || (folders.length === 1 && folders[0] === '*')) {
+            html += '<div class="dash-list-item"><span class="dash-list-text">Full workspace access</span></div>';
+            html += '<div style="padding:8px"><button class="btn btn-primary btn-sm" onclick="App.showDashboardFiles()">Browse All Files</button></div>';
+        } else {
+            folders.forEach(f => {
+                html += '<div class="dash-list-item dash-list-clickable" onclick="App.showDashboardFiles(\'' + this.escAttr(f) + '\')">';
+                html += '<span class="dash-list-icon">&#128193;</span>';
+                html += '<span class="dash-list-text">' + this.escHtml(f) + '</span>';
+                html += '<span class="dash-list-meta">&rarr;</span>';
+                html += '</div>';
+            });
+        }
+        html += '</div></div>';
+
+        // Quick actions
+        html += '<div class="dash-card">';
+        html += '<div class="dash-card-header">Quick Actions</div>';
+        html += '<div class="dash-quick-actions">';
+        html += '<button class="btn btn-primary btn-sm" onclick="App.showDashboardFiles()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg> Browse Files</button>';
+        if (this.canDo('can_upload')) html += '<button class="btn btn-sm" onclick="App.showDashboardFiles();setTimeout(()=>App.triggerUpload(),300)">Upload Files</button>';
+        html += '</div></div>';
+
+        // Unread notifications
+        html += '<div class="dash-card">';
+        html += '<div class="dash-card-header">Notifications <span class="dash-badge">' + (data.unread_notif_count || 0) + ' unread</span></div>';
+        html += '<div style="padding:8px"><button class="btn btn-sm" onclick="App.showNotificationsPanel()">View All Notifications</button></div>';
+        html += '</div>';
+
+        // Recent activity
+        html += '<div class="dash-card dash-card-wide">';
+        html += '<div class="dash-card-header">Recent Activity</div>';
+        html += '<div class="dash-list">';
+        (data.recent_activity || []).slice(0, 6).forEach(a => {
+            const icon = a.action_type === 'upload' ? '&#128228;' : a.action_type === 'delete' ? '&#128465;' : '&#128203;';
+            html += '<div class="dash-list-item">';
+            html += '<span class="dash-list-icon">' + icon + '</span>';
+            html += '<span class="dash-list-text"><strong>' + this.escHtml(a.display_name) + '</strong> ' + this.escHtml(a.action_type.replace(/_/g, ' ')) + '</span>';
+            html += '<span class="dash-list-meta">' + this.formatDate(a.created_at) + '</span>';
+            html += '</div>';
+        });
+        if (!data.recent_activity || data.recent_activity.length === 0) {
+            html += '<div class="dash-empty">No recent activity</div>';
+        }
+        html += '</div></div>';
+
+        return html;
+    },
+
+    _renderClientDashboard(data) {
+        let html = '';
+
+        // My Projects
+        html += '<div class="dash-card dash-card-wide">';
+        html += '<div class="dash-card-header">My Projects</div>';
+        html += '<div class="dash-projects">';
+        const stats = data.folder_stats || [];
+        if (stats.length === 0) {
+            html += '<div class="dash-empty">No projects assigned yet</div>';
+        } else {
+            stats.forEach(s => {
+                html += '<div class="dash-project-card" onclick="App.showDashboardFiles(\'' + this.escAttr(s.path) + '\')">';
+                html += '<div class="dash-project-icon">&#128193;</div>';
+                html += '<div class="dash-project-name">' + this.escHtml(s.path) + '</div>';
+                html += '<div class="dash-project-meta">' + s.file_count + ' files</div>';
+                if (s.last_modified) html += '<div class="dash-project-date">Updated ' + this.formatDate(s.last_modified) + '</div>';
+                html += '</div>';
+            });
+        }
+        html += '</div></div>';
+
+        // Quick actions
+        html += '<div class="dash-card">';
+        html += '<div class="dash-card-header">Quick Actions</div>';
+        html += '<div class="dash-quick-actions">';
+        html += '<button class="btn btn-primary btn-sm" onclick="App.showDashboardFiles()">Browse Files</button>';
+        if (this.canDo('can_upload')) html += '<button class="btn btn-sm" onclick="App.showDashboardFiles();setTimeout(()=>App.triggerUpload(),300)">Upload Files</button>';
+        html += '</div></div>';
+
+        // My recent reviews
+        html += '<div class="dash-card">';
+        html += '<div class="dash-card-header">My Reviews</div>';
+        html += '<div class="dash-list">';
+        (data.my_reviews || []).slice(0, 5).forEach(r => {
+            const icon = r.type === 'approval' ? '&#9989;' : '&#128172;';
+            html += '<div class="dash-list-item">';
+            html += '<span class="dash-list-icon">' + icon + '</span>';
+            html += '<span class="dash-list-text">' + this.escHtml(r.text || r.type) + '</span>';
+            html += '<span class="dash-list-meta">' + this.formatDate(r.created_at) + '</span>';
+            html += '</div>';
+        });
+        if (!data.my_reviews || data.my_reviews.length === 0) {
+            html += '<div class="dash-empty">No reviews yet</div>';
+        }
+        html += '</div></div>';
+
+        // Recent activity
+        html += '<div class="dash-card">';
+        html += '<div class="dash-card-header">Recent Activity</div>';
+        html += '<div class="dash-list">';
+        (data.recent_activity || []).slice(0, 5).forEach(a => {
+            html += '<div class="dash-list-item">';
+            html += '<span class="dash-list-text"><strong>' + this.escHtml(a.display_name) + '</strong> ' + this.escHtml(a.action_type.replace(/_/g, ' ')) + '</span>';
+            html += '<span class="dash-list-meta">' + this.formatDate(a.created_at) + '</span>';
+            html += '</div>';
+        });
+        if (!data.recent_activity || data.recent_activity.length === 0) {
+            html += '<div class="dash-empty">No recent activity</div>';
+        }
+        html += '</div></div>';
+
+        return html;
+    },
+
+    showDashboardFiles(path) {
+        this._currentScreen = 'files';
+        const header = document.querySelector('.file-list-header');
+        if (header) header.style.display = '';
+        if (path) {
+            this.loadFiles(path);
+        } else if (this.user && this.user.role !== 'admin' && this.user.permissions?.allowed_paths) {
             const allowed = this.user.permissions.allowed_paths;
             if (Array.isArray(allowed) && allowed.length > 0 && allowed[0] !== '*') {
                 this.loadFiles(allowed[0]);
                 return;
             }
+            this.loadFiles('');
+        } else {
+            this.loadFiles('');
         }
-        this.loadFiles('');
     },
 
     _debounce(fn, ms) {
@@ -171,11 +390,18 @@ const App = {
         return this.user?.role === 'admin';
     },
 
-    async apiFetch(url, options) {
-        const res = await fetch(url, options);
+    async apiFetch(url, options = {}) {
+        // Add CSRF token to all non-GET requests
+        if (options.method && options.method !== 'GET') {
+            if (!options.headers) options.headers = {};
+            if (typeof options.headers === 'object' && !(options.headers instanceof Headers)) {
+                options.headers['X-CSRF-Token'] = window.PYRA_CONFIG?.csrf_token || '';
+            }
+        }
+        const res = await fetch(url, { credentials: 'same-origin', ...options });
         if (res.status === 401) {
-            location.reload();
-            return res;
+            this.toast('Session expired. Please login again.', 'error');
+            setTimeout(() => location.reload(), 1500);
         }
         return res;
     },
@@ -549,9 +775,10 @@ const App = {
             </div>`;
         }
 
-        // Load reviews below preview content
+        // Load reviews and version history below preview content
         if (this._previewId === myId) {
             this.loadFileReviews(file.path);
+            this.loadFileVersions(file.path);
         }
     },
 
@@ -1040,6 +1267,10 @@ const App = {
         if (this._modalAbort) { this._modalAbort.abort(); this._modalAbort = null; }
     },
 
+    hideModal() {
+        this.closeModal();
+    },
+
     // === Reviews ===
     async loadFileReviews(path) {
         try {
@@ -1061,55 +1292,132 @@ const App = {
         }
     },
 
+    _buildReviewTree(reviews) {
+        const map = {};
+        const roots = [];
+        reviews.forEach(r => { map[r.id] = { ...r, children: [] }; });
+        reviews.forEach(r => {
+            if (r.parent_id && map[r.parent_id]) {
+                map[r.parent_id].children.push(map[r.id]);
+            } else {
+                roots.push(map[r.id]);
+            }
+        });
+        return roots;
+    },
+
     renderReviews(container, reviews, path) {
-        let html = `<div class="reviews-header">
-            <h3><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg> Reviews <span class="reviews-count">${reviews.length}</span></h3>
-        </div>`;
+        const tree = this._buildReviewTree(reviews);
 
-        if (reviews.length > 0) {
-            reviews.forEach(r => {
-                const isResolved = !!r.resolved;
-                const isApproval = r.type === 'approval';
-                const typeClass = isApproval ? 'approval' : 'comment';
-                const dateStr = r.created_at ? this.formatDate(r.created_at) : '';
+        let html = '<div class="reviews-header">';
+        html += '<h3><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg> Reviews <span class="reviews-count">' + reviews.length + '</span></h3>';
+        html += '</div>';
 
-                html += `<div class="review-item ${typeClass}${isResolved ? ' resolved' : ''}">`;
-                html += `<div class="review-meta">`;
-                html += `<div class="review-meta-left">`;
-                html += `<span class="review-author">${this.escHtml(r.display_name || r.username || 'Unknown')}</span>`;
-                html += `<span class="review-type-badge ${typeClass}">${isApproval ? 'Approved' : 'Comment'}</span>`;
-                if (isResolved) html += `<span class="review-resolved-badge">resolved</span>`;
-                html += `</div>`;
-                html += `<div class="review-meta-right">`;
-                html += `<span class="review-date">${this.escHtml(dateStr)}</span>`;
-                if (this.isAdmin()) {
-                    html += `<div class="review-actions">`;
-                    html += `<button class="btn btn-sm btn-ghost" onclick="App.toggleResolve('${this.escAttr(String(r.id))}', '${this.escAttr(path)}')">${isResolved ? 'Unresolve' : 'Resolve'}</button>`;
-                    html += `<button class="btn btn-sm btn-ghost btn-danger" onclick="App.deleteReviewItem('${this.escAttr(String(r.id))}', '${this.escAttr(path)}')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="12" height="12"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg></button>`;
-                    html += `</div>`;
-                }
-                html += `</div>`;
-                html += `</div>`;
-                if (r.text) {
-                    html += `<div class="review-text">${this.escHtml(r.text)}</div>`;
-                }
-                html += `</div>`;
-            });
+        if (tree.length > 0) {
+            html += this._renderReviewNodes(tree, path, 0);
         } else {
-            html += `<div class="review-empty"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" width="32" height="32" style="opacity:0.3;margin-bottom:8px;display:block;margin-left:auto;margin-right:auto;"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>No reviews yet</div>`;
+            html += '<div class="review-empty"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" width="32" height="32" style="opacity:0.3;margin-bottom:8px;display:block;margin-left:auto;margin-right:auto;"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>No reviews yet</div>';
         }
 
         if (this.canDo('can_review') || this.isAdmin()) {
-            html += `<div class="review-input-area">`;
-            html += `<textarea id="reviewTextarea" class="review-textarea" placeholder="Write a comment..."></textarea>`;
-            html += `<div class="review-submit-actions">`;
-            html += `<button class="btn btn-sm btn-primary" onclick="App.submitComment('${this.escAttr(path)}')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg> Send Comment</button>`;
-            html += `<button class="btn btn-sm btn-approve" onclick="App.approveFile('${this.escAttr(path)}')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><polyline points="20 6 9 17 4 12"/></svg> Approve File</button>`;
-            html += `</div>`;
-            html += `</div>`;
+            html += '<div class="review-input-area">';
+            html += '<textarea id="reviewTextarea" class="review-textarea" placeholder="Write a comment..."></textarea>';
+            html += '<div class="review-submit-actions">';
+            html += '<button class="btn btn-sm btn-primary" onclick="App.submitComment(\'' + this.escAttr(path) + '\')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg> Send Comment</button>';
+            html += '<button class="btn btn-sm btn-approve" onclick="App.approveFile(\'' + this.escAttr(path) + '\')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><polyline points="20 6 9 17 4 12"/></svg> Approve File</button>';
+            html += '</div>';
+            html += '</div>';
         }
 
         container.innerHTML = html;
+    },
+
+    _renderReviewNodes(nodes, path, depth) {
+        let html = '';
+        const maxDepth = 3;
+        nodes.forEach(r => {
+            const isResolved = !!r.resolved;
+            const isApproval = r.type === 'approval';
+            const typeClass = isApproval ? 'approval' : 'comment';
+            const dateStr = r.created_at ? this.formatDate(r.created_at) : '';
+
+            html += '<div class="review-item ' + typeClass + (isResolved ? ' resolved' : '') + '" data-depth="' + depth + '" style="margin-left:' + (depth * 24) + 'px">';
+            html += '<div class="review-meta">';
+            html += '<div class="review-meta-left">';
+            html += '<span class="review-author">' + this.escHtml(r.display_name || r.username || 'Unknown') + '</span>';
+            html += '<span class="review-type-badge ' + typeClass + '">' + (isApproval ? 'Approved' : 'Comment') + '</span>';
+            if (isResolved) html += '<span class="review-resolved-badge">resolved</span>';
+            html += '</div>';
+            html += '<div class="review-meta-right">';
+            html += '<span class="review-date">' + this.escHtml(dateStr) + '</span>';
+            if (this.isAdmin()) {
+                html += '<div class="review-actions">';
+                html += '<button class="btn btn-sm btn-ghost" onclick="App.toggleResolve(\'' + this.escAttr(String(r.id)) + '\', \'' + this.escAttr(path) + '\')">' + (isResolved ? 'Unresolve' : 'Resolve') + '</button>';
+                html += '<button class="btn btn-sm btn-ghost btn-danger" onclick="App.deleteReviewItem(\'' + this.escAttr(String(r.id)) + '\', \'' + this.escAttr(path) + '\')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="12" height="12"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg></button>';
+                html += '</div>';
+            }
+            html += '</div>';
+            html += '</div>';
+            if (r.text) {
+                html += '<div class="review-text">' + this.escHtml(r.text) + '</div>';
+            }
+            // Reply button
+            if (depth < maxDepth && (this.canDo('can_review') || this.isAdmin())) {
+                html += '<div class="review-reply-actions">';
+                html += '<button class="btn btn-xs btn-ghost review-reply-btn" onclick="App._toggleReplyForm(\'' + this.escAttr(String(r.id)) + '\', \'' + this.escAttr(path) + '\')">&#8617; Reply</button>';
+                html += '</div>';
+                html += '<div class="review-reply-form" id="replyForm_' + r.id + '" style="display:none">';
+                html += '<textarea class="review-textarea review-reply-textarea" id="replyText_' + r.id + '" placeholder="Write a reply..."></textarea>';
+                html += '<div class="review-reply-submit">';
+                html += '<button class="btn btn-xs btn-primary" onclick="App.submitReply(\'' + this.escAttr(path) + '\', \'' + this.escAttr(String(r.id)) + '\')">Send Reply</button>';
+                html += '<button class="btn btn-xs btn-ghost" onclick="document.getElementById(\'replyForm_' + r.id + '\').style.display=\'none\'">Cancel</button>';
+                html += '</div></div>';
+            }
+            html += '</div>';
+
+            // Render children
+            if (r.children && r.children.length > 0) {
+                html += this._renderReviewNodes(r.children, path, depth + 1);
+            }
+        });
+        return html;
+    },
+
+    _toggleReplyForm(reviewId, path) {
+        const form = document.getElementById('replyForm_' + reviewId);
+        if (form) {
+            form.style.display = form.style.display === 'none' ? '' : 'none';
+            if (form.style.display !== 'none') {
+                const ta = document.getElementById('replyText_' + reviewId);
+                if (ta) ta.focus();
+            }
+        }
+    },
+
+    async submitReply(path, parentId) {
+        const textarea = document.getElementById('replyText_' + parentId);
+        if (!textarea) return;
+        const text = textarea.value.trim();
+        if (!text) {
+            this.toast('Please enter a reply', 'error');
+            return;
+        }
+        try {
+            const res = await this.apiFetch('api.php', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ action: 'addReview', path, type: 'comment', text, parent_id: parentId })
+            });
+            const data = await res.json();
+            if (data.success) {
+                this.toast('Reply added', 'success');
+                this.loadFileReviews(path);
+            } else {
+                this.toast('Failed: ' + (data.error || ''), 'error');
+            }
+        } catch (e) {
+            this.toast('Error: ' + e.message, 'error');
+        }
     },
 
     async submitComment(path) {
@@ -1187,6 +1495,99 @@ const App = {
             if (data.success) {
                 this.toast('Review deleted', 'success');
                 this.loadFileReviews(path);
+            } else {
+                this.toast('Failed: ' + (data.error || ''), 'error');
+            }
+        } catch (e) {
+            this.toast('Error: ' + e.message, 'error');
+        }
+    },
+
+    // === File Version History ===
+    async loadFileVersions(path) {
+        try {
+            const res = await this.apiFetch('api.php?action=getFileVersions&path=' + encodeURIComponent(path));
+            const data = await res.json();
+            if (data.success) {
+                this._renderVersionHistory(data.versions || [], path);
+            }
+        } catch (e) {
+            // silently fail
+        }
+    },
+
+    _renderVersionHistory(versions, path) {
+        let container = document.getElementById('versionsSection');
+        if (!container) {
+            container = document.createElement('div');
+            container.className = 'versions-section';
+            container.id = 'versionsSection';
+            const previewBody = document.getElementById('previewBody');
+            if (previewBody) previewBody.appendChild(container);
+        }
+
+        let html = '<div class="versions-header">';
+        html += '<h3><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg> Version History <span class="versions-count">' + versions.length + '</span></h3>';
+        html += '</div>';
+
+        if (versions.length > 0) {
+            versions.forEach((v, i) => {
+                html += '<div class="version-item">';
+                html += '<div class="version-info">';
+                html += '<span class="version-number">v' + v.version_number + '</span>';
+                html += '<span class="version-author">' + this.escHtml(v.created_by_display || v.created_by) + '</span>';
+                html += '<span class="version-date">' + this.formatDate(v.created_at) + '</span>';
+                html += '<span class="version-size">' + this.formatSize(v.file_size) + '</span>';
+                html += '</div>';
+                html += '<div class="version-actions">';
+                html += '<button class="btn btn-xs btn-ghost" onclick="App.restoreVersion(\'' + this.escAttr(v.id) + '\', \'' + this.escAttr(path) + '\')" title="Restore this version">Restore</button>';
+                if (this.isAdmin()) {
+                    html += '<button class="btn btn-xs btn-ghost btn-danger" onclick="App.deleteVersion(\'' + this.escAttr(v.id) + '\', \'' + this.escAttr(path) + '\')" title="Delete this version">Delete</button>';
+                }
+                html += '</div>';
+                html += '</div>';
+            });
+        } else {
+            html += '<div class="version-empty">No previous versions</div>';
+        }
+
+        container.innerHTML = html;
+    },
+
+    async restoreVersion(versionId, path) {
+        if (!confirm('Restore this version? The current file will be saved as a new version first.')) return;
+        try {
+            const res = await this.apiFetch('api.php', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ action: 'restoreVersion', version_id: versionId })
+            });
+            const data = await res.json();
+            if (data.success) {
+                this.toast('Version restored successfully', 'success');
+                this.loadFileVersions(path);
+                // Refresh preview
+                if (this.selectedFile) this.showPreview(this.selectedFile);
+            } else {
+                this.toast('Failed: ' + (data.error || ''), 'error');
+            }
+        } catch (e) {
+            this.toast('Error: ' + e.message, 'error');
+        }
+    },
+
+    async deleteVersion(versionId, path) {
+        if (!confirm('Delete this version permanently?')) return;
+        try {
+            const res = await this.apiFetch('api.php', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ action: 'deleteVersion', version_id: versionId })
+            });
+            const data = await res.json();
+            if (data.success) {
+                this.toast('Version deleted', 'success');
+                this.loadFileVersions(path);
             } else {
                 this.toast('Failed: ' + (data.error || ''), 'error');
             }
@@ -3366,6 +3767,175 @@ const App = {
                 this.toast('Failed: ' + (data.error || ''), 'error');
             }
         } catch (e) { this.toast('Error: ' + e.message, 'error'); }
+    },
+
+    // === Settings Panel (Admin) ===
+    async showSettingsPanel() {
+        if (!this.isAdmin()) return;
+
+        const overlay = document.getElementById('modalOverlay');
+        const content = document.getElementById('modalContent');
+        const title = document.getElementById('modalTitle');
+        const body = document.getElementById('modalBody');
+        const actions = document.getElementById('modalActions');
+
+        title.textContent = 'System Settings';
+        body.innerHTML = '<div class="spinner"></div> Loading settings...';
+        actions.innerHTML = '';
+        content.style.maxWidth = '600px';
+        overlay.classList.add('active');
+
+        try {
+            const res = await this.apiFetch('api.php?action=getSettings');
+            const data = await res.json();
+            if (!data.success) {
+                body.innerHTML = '<div class="error">Failed to load settings</div>';
+                return;
+            }
+
+            const s = data.settings || {};
+            let html = '<div class="settings-form">';
+
+            // General
+            html += '<div class="settings-section"><div class="settings-section-title">General</div>';
+            html += '<div class="settings-row"><label>Application Name</label><input type="text" id="set_app_name" value="' + this.escAttr(s.app_name || 'Pyra Workspace') + '"></div>';
+            html += '<div class="settings-row"><label>Logo URL (leave empty for default)</label><input type="text" id="set_app_logo_url" value="' + this.escAttr(s.app_logo_url || '') + '" placeholder="https://..."></div>';
+            html += '<div class="settings-row"><label>Primary Color</label><input type="color" id="set_primary_color" value="' + this.escAttr(s.primary_color || '#8b5cf6') + '"></div>';
+            html += '</div>';
+
+            // Storage
+            html += '<div class="settings-section"><div class="settings-section-title">Storage & Versioning</div>';
+            html += '<div class="settings-row"><label>Max Upload Size (bytes)</label><input type="number" id="set_max_upload_size" value="' + this.escAttr(s.max_upload_size || '524288000') + '"></div>';
+            html += '<div class="settings-row"><label>Auto-version on upload</label><select id="set_auto_version_on_upload"><option value="true"' + (s.auto_version_on_upload !== 'false' ? ' selected' : '') + '>Yes</option><option value="false"' + (s.auto_version_on_upload === 'false' ? ' selected' : '') + '>No</option></select></div>';
+            html += '<div class="settings-row"><label>Max versions per file</label><input type="number" id="set_max_versions_per_file" value="' + this.escAttr(s.max_versions_per_file || '10') + '"></div>';
+            html += '<div class="settings-row"><label>Trash auto-purge (days)</label><input type="number" id="set_trash_auto_purge_days" value="' + this.escAttr(s.trash_auto_purge_days || '30') + '"></div>';
+            html += '</div>';
+
+            // Sharing
+            html += '<div class="settings-section"><div class="settings-section-title">Sharing</div>';
+            html += '<div class="settings-row"><label>Allow public share links</label><select id="set_allow_public_shares"><option value="true"' + (s.allow_public_shares !== 'false' ? ' selected' : '') + '>Yes</option><option value="false"' + (s.allow_public_shares === 'false' ? ' selected' : '') + '>No</option></select></div>';
+            html += '<div class="settings-row"><label>Default share expiry (hours)</label><input type="number" id="set_share_default_expiry_hours" value="' + this.escAttr(s.share_default_expiry_hours || '24') + '"></div>';
+            html += '</div>';
+
+            // Security
+            html += '<div class="settings-section"><div class="settings-section-title">Security</div>';
+            html += '<div class="settings-row"><label>Session timeout (minutes)</label><input type="number" id="set_session_timeout_minutes" value="' + this.escAttr(s.session_timeout_minutes || '480') + '"></div>';
+            html += '<div class="settings-row"><label>Max failed logins before lockout</label><input type="number" id="set_max_failed_logins" value="' + this.escAttr(s.max_failed_logins || '5') + '"></div>';
+            html += '<div class="settings-row"><label>Lockout duration (minutes)</label><input type="number" id="set_lockout_duration_minutes" value="' + this.escAttr(s.lockout_duration_minutes || '15') + '"></div>';
+            html += '</div>';
+
+            // Index management
+            html += '<div class="settings-section"><div class="settings-section-title">Search Index</div>';
+            html += '<div class="settings-row"><button class="btn btn-sm" onclick="App._rebuildSearchIndex()">Rebuild File Index</button> <span id="rebuildIndexStatus"></span></div>';
+            html += '</div>';
+
+            // Session management
+            html += '<div class="settings-section"><div class="settings-section-title">Active Sessions</div>';
+            html += '<div id="settingsSessionsList"><div class="spinner"></div></div>';
+            html += '</div>';
+
+            html += '</div>';
+            body.innerHTML = html;
+
+            actions.innerHTML = '<button class="btn" onclick="App.hideModal()">Cancel</button><button class="btn btn-primary" onclick="App._saveSettings()">Save Settings</button>';
+
+            // Load sessions
+            this._loadSettingsSessions();
+
+        } catch (e) {
+            body.innerHTML = '<div class="error">Error: ' + this.escHtml(e.message) + '</div>';
+        }
+    },
+
+    async _saveSettings() {
+        const keys = ['app_name', 'app_logo_url', 'primary_color', 'max_upload_size', 'auto_version_on_upload', 'max_versions_per_file', 'trash_auto_purge_days', 'allow_public_shares', 'share_default_expiry_hours', 'session_timeout_minutes', 'max_failed_logins', 'lockout_duration_minutes'];
+        const settings = {};
+        keys.forEach(k => {
+            const el = document.getElementById('set_' + k);
+            if (el) settings[k] = el.value;
+        });
+
+        try {
+            const res = await this.apiFetch('api.php', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ action: 'updateSettings', settings })
+            });
+            const data = await res.json();
+            if (data.success) {
+                this.toast('Settings saved (' + data.updated + ' updated)', 'success');
+                this.hideModal();
+            } else {
+                this.toast('Failed: ' + (data.error || ''), 'error');
+            }
+        } catch (e) {
+            this.toast('Error: ' + e.message, 'error');
+        }
+    },
+
+    async _rebuildSearchIndex() {
+        const status = document.getElementById('rebuildIndexStatus');
+        if (status) status.textContent = 'Rebuilding...';
+        try {
+            const res = await this.apiFetch('api.php', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ action: 'rebuildIndex' })
+            });
+            const data = await res.json();
+            if (data.success) {
+                if (status) status.textContent = 'Done! ' + data.indexed + ' files indexed.';
+                this.toast('Index rebuilt: ' + data.indexed + ' files', 'success');
+            } else {
+                if (status) status.textContent = 'Failed: ' + (data.error || '');
+            }
+        } catch (e) {
+            if (status) status.textContent = 'Error: ' + e.message;
+        }
+    },
+
+    async _loadSettingsSessions() {
+        const container = document.getElementById('settingsSessionsList');
+        if (!container) return;
+        try {
+            const res = await this.apiFetch('api.php?action=getSessions&username=' + encodeURIComponent(this.user?.username || ''));
+            const data = await res.json();
+            if (data.success && data.sessions) {
+                let html = '';
+                data.sessions.forEach(s => {
+                    html += '<div class="session-item">';
+                    html += '<div class="session-info">';
+                    html += '<span class="session-ip">' + this.escHtml(s.ip_address || 'Unknown IP') + '</span>';
+                    html += '<span class="session-ua">' + this.escHtml((s.user_agent || '').substring(0, 60)) + '</span>';
+                    html += '<span class="session-time">Last active: ' + this.formatDate(s.last_activity) + '</span>';
+                    html += '</div>';
+                    html += '<button class="btn btn-xs btn-ghost btn-danger" onclick="App._terminateSession(\'' + this.escAttr(s.id) + '\')">End</button>';
+                    html += '</div>';
+                });
+                if (data.sessions.length === 0) html = '<div class="dash-empty">No active sessions</div>';
+                container.innerHTML = html;
+            }
+        } catch (e) {
+            container.innerHTML = '<div class="dash-empty">Failed to load sessions</div>';
+        }
+    },
+
+    async _terminateSession(sessionId) {
+        if (!confirm('Terminate this session?')) return;
+        try {
+            const res = await this.apiFetch('api.php', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ action: 'terminateSession', session_id: sessionId })
+            });
+            const data = await res.json();
+            if (data.success) {
+                this.toast('Session terminated', 'success');
+                this._loadSettingsSessions();
+            }
+        } catch (e) {
+            this.toast('Error: ' + e.message, 'error');
+        }
     },
 
     // === Helpers ===
