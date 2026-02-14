@@ -1195,10 +1195,16 @@ const App = {
         }
     },
 
-    // === User Management ===
-    // === User Management ===
+    // === User Management (Enhanced) ===
     _ufFolders: [],
     _ufSelectedPaths: ['*'],
+    _folderTreeCache: {},
+    _folderTreeExpanded: {},
+    _ufPerFolderPerms: {},
+    _ufAvailableTeams: [],
+    _ufSelectedTeams: [],
+    _ufAllUsers: [],
+    _permTemplates: JSON.parse(localStorage.getItem('pyra-perm-templates') || '[]'),
 
     // Role presets - default permissions per role
     _rolePresets: {
@@ -1289,14 +1295,48 @@ const App = {
         overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
     },
 
-    async _loadRootFolders() {
+    async _loadFolderChildren(prefix) {
+        if (this._folderTreeCache[prefix] !== undefined) {
+            return this._folderTreeCache[prefix];
+        }
         try {
-            const res = await this.apiFetch('api.php?action=list&prefix=');
+            const res = await this.apiFetch('api.php?action=list&prefix=' + encodeURIComponent(prefix));
             const data = await res.json();
-            if (data.success) {
-                this._ufFolders = data.folders || [];
+            const folders = data.success ? (data.folders || []) : [];
+            this._folderTreeCache[prefix] = folders;
+            if (prefix === '') this._ufFolders = folders;
+            return folders;
+        } catch (e) {
+            this._folderTreeCache[prefix] = [];
+            return [];
+        }
+    },
+
+    _resetFolderTreeState() {
+        this._folderTreeCache = {};
+        this._folderTreeExpanded = {};
+        this._ufPerFolderPerms = {};
+        this._ufSelectedPaths = ['*'];
+        this._ufSelectedTeams = [];
+    },
+
+    async _loadAvailableTeams() {
+        try {
+            const res = await this.apiFetch('api.php?action=getTeams');
+            const data = await res.json();
+            this._ufAvailableTeams = data.success ? (data.teams || []) : [];
+        } catch (e) { this._ufAvailableTeams = []; }
+    },
+
+    _getUserCurrentTeams(username) {
+        const teams = [];
+        this._ufAvailableTeams.forEach(t => {
+            const members = t.members || [];
+            if (members.some(m => m.username === username)) {
+                teams.push(t.id);
             }
-        } catch (e) { this._ufFolders = []; }
+        });
+        return teams;
     },
 
     _checkSvg() {
@@ -1308,43 +1348,157 @@ const App = {
         if (!container) return;
 
         const isAll = this._ufSelectedPaths.includes('*');
+        const self = this;
 
         let html = `<div class="folder-picker-item all-access ${isAll ? 'selected' : ''}" data-path="*">
+            <span class="folder-tree-toggle placeholder"></span>
             <span class="fp-check">${this._checkSvg()}</span>
             <span class="fp-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="8 12 12 8 16 12"/><line x1="12" y1="16" x2="12" y2="8"/></svg></span>
             <span>All Folders (Full Access)</span>
         </div>`;
 
+        function renderTreeLevel(folders, depth) {
+            let out = '';
+            folders.forEach(f => {
+                const selected = !isAll && self._ufSelectedPaths.includes(f.path);
+                const expanded = !!self._folderTreeExpanded[f.path];
+                const indent = (depth * 20) + 10;
+                const hasOverride = !!self._ufPerFolderPerms[f.path];
+
+                out += `<div class="folder-picker-item ${selected ? 'selected' : ''} ${isAll ? 'disabled' : ''}" data-path="${self.escAttr(f.path)}" data-depth="${depth}" style="padding-left:${indent}px;${isAll ? 'opacity:0.4;pointer-events:none;' : ''}">
+                    <button class="folder-tree-toggle ${expanded ? 'expanded' : ''}" data-toggle-path="${self.escAttr(f.path)}" title="Expand">&#9654;</button>
+                    <span class="fp-check">${self._checkSvg()}</span>
+                    <span class="fp-icon">${self.icons.folder}</span>
+                    <span class="fp-name">${self.escHtml(f.name)}</span>
+                    ${selected ? `<button class="folder-perm-toggle ${hasOverride ? 'active' : ''}" data-perm-path="${self.escAttr(f.path)}" title="Customize permissions">\u2699</button>` : ''}
+                </div>`;
+
+                // Per-folder permissions inline grid
+                if (selected && hasOverride) {
+                    out += `<div class="folder-perm-override" style="padding-left:${indent + 20}px;" data-override-path="${self.escAttr(f.path)}"></div>`;
+                }
+
+                // Render expanded children
+                if (expanded && self._folderTreeCache[f.path]) {
+                    const children = self._folderTreeCache[f.path];
+                    if (children.length > 0 && depth < 4) {
+                        out += renderTreeLevel(children, depth + 1);
+                    }
+                }
+            });
+            return out;
+        }
+
         if (this._ufFolders.length === 0) {
             html += '<div class="folder-picker-empty">No folders found. Create folders first.</div>';
         } else {
-            this._ufFolders.forEach(f => {
-                const selected = !isAll && this._ufSelectedPaths.includes(f.path);
-                html += `<div class="folder-picker-item ${selected ? 'selected' : ''} ${isAll ? 'disabled' : ''}" data-path="${this.escAttr(f.path)}" ${isAll ? 'style="opacity:0.4;pointer-events:none;"' : ''}>
-                    <span class="fp-check">${this._checkSvg()}</span>
-                    <span class="fp-icon">${this.icons.folder}</span>
-                    <span>${this.escHtml(f.name)}</span>
-                </div>`;
-            });
+            html += renderTreeLevel(this._ufFolders, 0);
         }
 
         container.innerHTML = html;
 
+        // Render per-folder permission grids
+        container.querySelectorAll('.folder-perm-override').forEach(el => {
+            const path = el.dataset.overridePath;
+            if (this._ufPerFolderPerms[path]) {
+                this._renderFolderPermOverride(path, el);
+            }
+        });
+
+        // Bind folder selection clicks
         container.querySelectorAll('.folder-picker-item').forEach(item => {
-            item.addEventListener('click', () => {
+            // Clicking the folder name/check area
+            item.addEventListener('click', (e) => {
+                if (e.target.closest('.folder-tree-toggle') || e.target.closest('.folder-perm-toggle')) return;
                 const path = item.dataset.path;
                 if (path === '*') {
                     this._ufSelectedPaths = ['*'];
+                    this._ufPerFolderPerms = {};
                 } else {
                     this._ufSelectedPaths = this._ufSelectedPaths.filter(p => p !== '*');
                     if (this._ufSelectedPaths.includes(path)) {
                         this._ufSelectedPaths = this._ufSelectedPaths.filter(p => p !== path);
+                        delete this._ufPerFolderPerms[path];
                     } else {
                         this._ufSelectedPaths.push(path);
                     }
                     if (this._ufSelectedPaths.length === 0) this._ufSelectedPaths = ['*'];
                 }
                 this._renderFolderPicker(containerId);
+            });
+        });
+
+        // Bind expand/collapse toggle clicks
+        container.querySelectorAll('.folder-tree-toggle:not(.placeholder)').forEach(btn => {
+            btn.addEventListener('click', async (e) => {
+                e.stopPropagation();
+                const path = btn.dataset.togglePath;
+                if (this._folderTreeExpanded[path]) {
+                    delete this._folderTreeExpanded[path];
+                    this._renderFolderPicker(containerId);
+                } else {
+                    // Show loading
+                    btn.innerHTML = '<span class="tree-loading"></span>';
+                    const children = await this._loadFolderChildren(path);
+                    this._folderTreeExpanded[path] = true;
+                    this._renderFolderPicker(containerId);
+                }
+            });
+        });
+
+        // Bind per-folder permission toggle clicks
+        container.querySelectorAll('.folder-perm-toggle').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                const path = btn.dataset.permPath;
+                if (this._ufPerFolderPerms[path]) {
+                    delete this._ufPerFolderPerms[path];
+                } else {
+                    // Initialize with global defaults
+                    const globalPerms = {};
+                    document.querySelectorAll('#uf_perms_container .perm-checkbox, #tf_perms_container .perm-checkbox').forEach(label => {
+                        globalPerms[label.dataset.key] = label.querySelector('input').checked;
+                    });
+                    this._ufPerFolderPerms[path] = { ...globalPerms };
+                }
+                this._renderFolderPicker(containerId);
+            });
+        });
+    },
+
+    _renderFolderPermOverride(path, containerEl) {
+        const perms = this._ufPerFolderPerms[path] || {};
+        const permDefs = [
+            { key: 'can_upload', label: 'Upload' },
+            { key: 'can_edit', label: 'Edit' },
+            { key: 'can_delete', label: 'Delete' },
+            { key: 'can_download', label: 'Download' },
+            { key: 'can_create_folder', label: 'Folder' },
+            { key: 'can_review', label: 'Review' },
+        ];
+
+        let html = '<div class="folder-perm-label">Custom permissions for this folder:</div><div class="folder-perm-grid">';
+        permDefs.forEach(p => {
+            const checked = !!perms[p.key];
+            html += `<label class="perm-checkbox ${checked ? 'checked' : ''}" data-key="${p.key}" data-pfp-path="${this.escAttr(path)}">
+                <input type="checkbox" ${checked ? 'checked' : ''}>
+                <span class="perm-icon">${this._checkSvg()}</span>
+                <span>${p.label}</span>
+            </label>`;
+        });
+        html += '</div>';
+        containerEl.innerHTML = html;
+
+        containerEl.querySelectorAll('.perm-checkbox').forEach(label => {
+            label.addEventListener('click', (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                const cb = label.querySelector('input[type="checkbox"]');
+                cb.checked = !cb.checked;
+                label.classList.toggle('checked', cb.checked);
+                const pfpPath = label.dataset.pfpPath;
+                if (!this._ufPerFolderPerms[pfpPath]) this._ufPerFolderPerms[pfpPath] = {};
+                this._ufPerFolderPerms[pfpPath][label.dataset.key] = cb.checked;
             });
         });
     },
@@ -1389,6 +1543,9 @@ const App = {
             perms[label.dataset.key] = label.querySelector('input').checked;
         });
         perms.allowed_paths = [...this._ufSelectedPaths];
+        if (Object.keys(this._ufPerFolderPerms).length > 0) {
+            perms.per_folder_perms = { ...this._ufPerFolderPerms };
+        }
         return perms;
     },
 
@@ -1396,6 +1553,8 @@ const App = {
         const preset = this._rolePresets[role];
         if (!preset) return;
         this._ufSelectedPaths = [...preset.allowed_paths];
+        this._ufPerFolderPerms = {};
+        this._folderTreeExpanded = {};
         this._renderFolderPicker('uf_folder_picker');
         this._renderPermCheckboxes('uf_perms_container', preset);
     },
@@ -1404,16 +1563,16 @@ const App = {
         const isEdit = mode === 'edit';
         const currentRole = isEdit ? user.role : 'employee';
         const title = isEdit ? `Edit User: ${this.escHtml(user.username)}` : 'Add User';
-        const submitLabel = isEdit ? 'Save Changes' : 'Add User';
+        const submitLabel = isEdit ? 'Review Changes' : 'Review & Create';
         const submitFn = isEdit ? `App._submitEditUser('${this.escAttr(user.username)}')` : 'App._submitAddUser()';
 
         return `
-            <div class="users-panel" style="width:520px;">
+            <div class="users-panel" style="width:560px;">
                 <div class="users-panel-header">
                     <h2>${title}</h2>
                     <button class="btn btn-sm btn-ghost" onclick="document.getElementById('userFormOverlay').remove()">${this.icons.close}</button>
                 </div>
-                <div class="users-panel-body">
+                <div class="users-panel-body" id="uf_form_body">
                     <div class="user-form">
                         <div class="user-form-row">
                             <div>
@@ -1437,6 +1596,14 @@ const App = {
                                 <option value="client" ${currentRole === 'client' ? 'selected' : ''}>Client - View and download only</option>
                             </select>
                         </div>
+                        <div class="uf-section-title">Quick Setup</div>
+                        <div class="quick-setup-row">
+                            <div class="template-selector" id="uf_template_selector"></div>
+                        </div>
+                        ${this._ufAvailableTeams.length > 0 ? `
+                        <div class="uf-section-title">Team Assignment</div>
+                        <div class="team-selector" id="uf_team_selector"></div>
+                        ` : ''}
                         <div class="uf-section-title">Folder Access</div>
                         <div class="folder-picker" id="uf_folder_picker"></div>
                         <div class="uf-section-title">Permissions</div>
@@ -1450,14 +1617,279 @@ const App = {
             </div>`;
     },
 
+    // --- Template System ---
+    _renderTemplateSelector(containerId, mode) {
+        const container = document.getElementById(containerId);
+        if (!container) return;
+        const isAdd = mode === 'add';
+
+        let html = '';
+        // Built-in templates
+        ['admin', 'employee', 'client'].forEach(role => {
+            html += `<div class="template-card builtin" onclick="App._applyRolePreset('${role}')">${role.charAt(0).toUpperCase() + role.slice(1)}</div>`;
+        });
+        // Custom templates
+        this._permTemplates.forEach((t, i) => {
+            html += `<div class="template-card" onclick="App._applyPermTemplate(${i})">
+                ${this.escHtml(t.name)}
+                <button class="template-delete" onclick="event.stopPropagation();App._deletePermTemplate(${i})">&times;</button>
+            </div>`;
+        });
+        // Save as template button
+        html += `<button class="template-save-btn" onclick="App._saveCurrentAsTemplate()">+ Save as Template</button>`;
+        // Copy from user (add mode only)
+        if (isAdd && this._ufAllUsers.length > 0) {
+            html += `<button class="copy-user-btn" onclick="App._showCopyFromUserDropdown(this)" style="position:relative;">Copy from User</button>`;
+        }
+        container.innerHTML = html;
+    },
+
+    _applyPermTemplate(index) {
+        const t = this._permTemplates[index];
+        if (!t) return;
+        if (t.role) {
+            document.getElementById('uf_role').value = t.role;
+        }
+        this._ufSelectedPaths = t.allowed_paths ? [...t.allowed_paths] : ['*'];
+        this._ufPerFolderPerms = t.per_folder_perms ? JSON.parse(JSON.stringify(t.per_folder_perms)) : {};
+        const perms = t.permissions || {};
+        this._renderFolderPicker('uf_folder_picker');
+        this._renderPermCheckboxes('uf_perms_container', perms);
+        this.toast('Template "' + t.name + '" applied', 'success');
+    },
+
+    _saveCurrentAsTemplate() {
+        const name = prompt('Template name:');
+        if (!name || !name.trim()) return;
+        const perms = this._getFormPermissions();
+        const role = document.getElementById('uf_role')?.value || 'employee';
+        this._permTemplates.push({
+            name: name.trim(),
+            role,
+            permissions: { can_upload: perms.can_upload, can_edit: perms.can_edit, can_delete: perms.can_delete, can_download: perms.can_download, can_create_folder: perms.can_create_folder, can_review: perms.can_review },
+            allowed_paths: perms.allowed_paths || ['*'],
+            per_folder_perms: perms.per_folder_perms || {}
+        });
+        localStorage.setItem('pyra-perm-templates', JSON.stringify(this._permTemplates));
+        this._renderTemplateSelector('uf_template_selector', 'add');
+        this.toast('Template saved', 'success');
+    },
+
+    _deletePermTemplate(index) {
+        if (!confirm('Delete this template?')) return;
+        this._permTemplates.splice(index, 1);
+        localStorage.setItem('pyra-perm-templates', JSON.stringify(this._permTemplates));
+        this._renderTemplateSelector('uf_template_selector', 'add');
+        this.toast('Template deleted', 'success');
+    },
+
+    // --- Copy From User ---
+    _showCopyFromUserDropdown(btnEl) {
+        const existing = document.querySelector('.copy-user-dropdown');
+        if (existing) { existing.remove(); return; }
+
+        let html = '';
+        this._ufAllUsers.forEach(u => {
+            const uJson = this.escAttr(JSON.stringify({ role: u.role, permissions: u.permissions, username: u.username, display_name: u.display_name }));
+            html += `<div class="copy-user-item" onclick="App._copyPermissionsFromUser(${uJson})">
+                <span class="copy-user-name">${this.escHtml(u.display_name || u.username)}</span>
+                <span class="copy-user-role user-role-badge ${this.escAttr(u.role)}">${this.escHtml(u.role)}</span>
+            </div>`;
+        });
+
+        const dropdown = document.createElement('div');
+        dropdown.className = 'copy-user-dropdown';
+        dropdown.innerHTML = html;
+        btnEl.appendChild(dropdown);
+
+        setTimeout(() => {
+            document.addEventListener('click', function closeDd(e) {
+                if (!dropdown.contains(e.target) && e.target !== btnEl) {
+                    dropdown.remove();
+                    document.removeEventListener('click', closeDd);
+                }
+            });
+        }, 10);
+    },
+
+    _copyPermissionsFromUser(userData) {
+        document.querySelector('.copy-user-dropdown')?.remove();
+        const perms = userData.permissions || {};
+        const role = userData.role || 'employee';
+
+        document.getElementById('uf_role').value = role;
+        this._ufSelectedPaths = Array.isArray(perms.allowed_paths) ? [...perms.allowed_paths] : ['*'];
+        this._ufPerFolderPerms = perms.per_folder_perms ? JSON.parse(JSON.stringify(perms.per_folder_perms)) : {};
+        // Copy team memberships
+        this._ufSelectedTeams = this._getUserCurrentTeams(userData.username);
+
+        this._renderFolderPicker('uf_folder_picker');
+        this._renderPermCheckboxes('uf_perms_container', perms);
+        this._renderTeamSelector('uf_team_selector');
+        this.toast('Copied permissions from ' + (userData.display_name || userData.username), 'success');
+    },
+
+    // --- Team Selector ---
+    _renderTeamSelector(containerId) {
+        const container = document.getElementById(containerId);
+        if (!container) return;
+
+        if (this._ufAvailableTeams.length === 0) {
+            container.innerHTML = '<span class="team-selector-empty">No teams available</span>';
+            return;
+        }
+
+        let html = '';
+        this._ufAvailableTeams.forEach(t => {
+            const selected = this._ufSelectedTeams.includes(t.id);
+            html += `<div class="team-chip ${selected ? 'selected' : ''}" data-team-id="${this.escAttr(t.id)}">
+                <span class="team-chip-icon">${this.icons.team}</span>
+                ${this.escHtml(t.name)}
+            </div>`;
+        });
+        container.innerHTML = html;
+
+        container.querySelectorAll('.team-chip').forEach(chip => {
+            chip.addEventListener('click', () => {
+                const tid = chip.dataset.teamId;
+                if (this._ufSelectedTeams.includes(tid)) {
+                    this._ufSelectedTeams = this._ufSelectedTeams.filter(id => id !== tid);
+                } else {
+                    this._ufSelectedTeams.push(tid);
+                }
+                this._renderTeamSelector(containerId);
+            });
+        });
+    },
+
+    // --- Summary / Review Step ---
+    _showUserSummary(mode, userData, originalUsername) {
+        const body = document.getElementById('uf_form_body');
+        if (!body) return;
+
+        const perms = userData.permissions || {};
+        const paths = perms.allowed_paths || ['*'];
+        const isAllFolders = paths.includes('*');
+        const permDefs = [
+            { key: 'can_upload', label: 'Upload' },
+            { key: 'can_edit', label: 'Edit' },
+            { key: 'can_delete', label: 'Delete' },
+            { key: 'can_download', label: 'Download' },
+            { key: 'can_create_folder', label: 'Create Folder' },
+            { key: 'can_review', label: 'Review' },
+        ];
+
+        let permTagsHtml = '';
+        permDefs.forEach(p => {
+            permTagsHtml += `<span class="summary-perm-tag ${perms[p.key] ? 'active' : ''}">${p.label}</span>`;
+        });
+
+        let foldersHtml = '';
+        if (isAllFolders) {
+            foldersHtml = `<div class="summary-folder-item">${this.icons.folder} All Folders (Full Access)</div>`;
+        } else {
+            paths.forEach(p => {
+                const pfp = (perms.per_folder_perms || {})[p];
+                const overrideLabel = pfp ? ' (custom perms)' : '';
+                foldersHtml += `<div class="summary-folder-item">${this.icons.folder} ${this.escHtml(p)}${overrideLabel ? `<span class="summary-folder-perms">${overrideLabel}</span>` : ''}</div>`;
+            });
+        }
+
+        let teamsHtml = '';
+        if (userData.selectedTeams && userData.selectedTeams.length > 0) {
+            userData.selectedTeams.forEach(tid => {
+                const team = this._ufAvailableTeams.find(t => t.id === tid);
+                if (team) teamsHtml += `<span class="team-chip selected" style="pointer-events:none;">${this.icons.team} ${this.escHtml(team.name)}</span>`;
+            });
+        } else {
+            teamsHtml = '<span style="color:var(--text-muted);font-size:12px;">None</span>';
+        }
+
+        // Per-folder overrides detail
+        let pfpHtml = '';
+        const pfp = perms.per_folder_perms || {};
+        if (Object.keys(pfp).length > 0) {
+            pfpHtml = '<div class="summary-section"><div class="summary-section-title">Per-Folder Overrides</div>';
+            for (const [folderPath, folderPerms] of Object.entries(pfp)) {
+                let fpTags = '';
+                permDefs.forEach(p => {
+                    fpTags += `<span class="summary-perm-tag ${folderPerms[p.key] ? 'active' : ''}" style="font-size:10px;padding:2px 5px;">${p.label}</span>`;
+                });
+                pfpHtml += `<div style="margin-bottom:6px;">
+                    <div style="font-size:11px;color:var(--text-secondary);margin-bottom:3px;">${this.icons.folder} ${this.escHtml(folderPath)}</div>
+                    <div class="summary-perms-grid">${fpTags}</div>
+                </div>`;
+            }
+            pfpHtml += '</div>';
+        }
+
+        const backFn = mode === 'edit'
+            ? `App._restoreEditForm('${this.escAttr(originalUsername || '')}')`
+            : 'App._restoreAddForm()';
+        const confirmFn = mode === 'edit'
+            ? `App._doUpdateUser('${this.escAttr(originalUsername || '')}')`
+            : 'App._doCreateUser()';
+
+        body.innerHTML = `
+            <div class="user-summary">
+                <div class="summary-section">
+                    <div class="summary-section-title">User Details</div>
+                    <div class="summary-row">
+                        <span class="summary-row-label">Username</span>
+                        <span class="summary-row-value">${this.escHtml(userData.username)}</span>
+                    </div>
+                    <div class="summary-row">
+                        <span class="summary-row-label">Display Name</span>
+                        <span class="summary-row-value">${this.escHtml(userData.display_name)}</span>
+                    </div>
+                    <div class="summary-row">
+                        <span class="summary-row-label">Role</span>
+                        <span class="summary-row-value"><span class="user-role-badge ${this.escAttr(userData.role)}">${this.escHtml(userData.role)}</span></span>
+                    </div>
+                </div>
+
+                <div class="summary-section">
+                    <div class="summary-section-title">Teams</div>
+                    <div class="summary-teams-list">${teamsHtml}</div>
+                </div>
+
+                <div class="summary-section">
+                    <div class="summary-section-title">Folder Access</div>
+                    <div class="summary-folder-list">${foldersHtml}</div>
+                </div>
+
+                <div class="summary-section">
+                    <div class="summary-section-title">Global Permissions</div>
+                    <div class="summary-perms-grid">${permTagsHtml}</div>
+                </div>
+
+                ${pfpHtml}
+
+                <div class="summary-actions">
+                    <button class="btn btn-sm" onclick="${backFn}">\u2190 Back to Edit</button>
+                    <button class="btn btn-sm btn-primary" onclick="${confirmFn}">Confirm &amp; ${mode === 'edit' ? 'Save' : 'Create'}</button>
+                </div>
+            </div>`;
+    },
+
+    _pendingUserData: null,
+
     async showAddUserModal() {
         const existing = document.getElementById('userFormOverlay');
         if (existing) existing.remove();
 
         const defaultRole = 'employee';
         const preset = this._rolePresets[defaultRole];
+        this._resetFolderTreeState();
         this._ufSelectedPaths = [...preset.allowed_paths];
-        await this._loadRootFolders();
+
+        await Promise.all([this._loadFolderChildren(''), this._loadAvailableTeams()]);
+        // Load users for copy-from-user feature
+        try {
+            const res = await this.apiFetch('api.php?action=getUsers');
+            const data = await res.json();
+            this._ufAllUsers = data.success ? (data.users || []) : [];
+        } catch (e) { this._ufAllUsers = []; }
 
         const overlay = document.createElement('div');
         overlay.id = 'userFormOverlay';
@@ -1468,6 +1900,8 @@ const App = {
 
         this._renderFolderPicker('uf_folder_picker');
         this._renderPermCheckboxes('uf_perms_container', preset);
+        this._renderTemplateSelector('uf_template_selector', 'add');
+        this._renderTeamSelector('uf_team_selector');
     },
 
     async _submitAddUser() {
@@ -1486,20 +1920,61 @@ const App = {
         }
 
         const permissions = this._getFormPermissions();
+        this._pendingUserData = { username, display_name, password, role, permissions, selectedTeams: [...this._ufSelectedTeams] };
+        this._showUserSummary('add', this._pendingUserData);
+    },
 
+    async _restoreAddForm() {
+        const data = this._pendingUserData;
+        if (!data) return;
+        const body = document.getElementById('uf_form_body');
+        if (!body) return;
+        // Re-render the form
+        const overlay = document.getElementById('userFormOverlay');
+        if (!overlay) return;
+        this._ufSelectedPaths = data.permissions.allowed_paths || ['*'];
+        this._ufPerFolderPerms = data.permissions.per_folder_perms || {};
+        this._ufSelectedTeams = data.selectedTeams || [];
+        overlay.querySelector('.users-panel').outerHTML = this._userFormHtml('add', null);
+        document.getElementById('uf_username').value = data.username;
+        document.getElementById('uf_displayname').value = data.display_name;
+        document.getElementById('uf_password').value = data.password;
+        document.getElementById('uf_role').value = data.role;
+        this._renderFolderPicker('uf_folder_picker');
+        this._renderPermCheckboxes('uf_perms_container', data.permissions);
+        this._renderTemplateSelector('uf_template_selector', 'add');
+        this._renderTeamSelector('uf_team_selector');
+    },
+
+    async _doCreateUser() {
+        const data = this._pendingUserData;
+        if (!data) return;
         try {
             const res = await this.apiFetch('api.php', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ action: 'addUser', username, password, role, display_name, permissions })
+                body: JSON.stringify({ action: 'addUser', username: data.username, password: data.password, role: data.role, display_name: data.display_name, permissions: data.permissions })
             });
-            const data = await res.json();
-            if (data.success) {
-                this.toast('User created successfully', 'success');
+            const result = await res.json();
+            if (result.success) {
+                // Add to selected teams
+                let teamCount = 0;
+                for (const tid of (data.selectedTeams || [])) {
+                    try {
+                        await this.apiFetch('api.php', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ action: 'addTeamMember', team_id: tid, username: data.username })
+                        });
+                        teamCount++;
+                    } catch (e) { /* ignore team add errors */ }
+                }
+                const msg = teamCount > 0 ? `User created and added to ${teamCount} team(s)` : 'User created successfully';
+                this.toast(msg, 'success');
                 document.getElementById('userFormOverlay')?.remove();
                 this.showUsersPanel();
             } else {
-                this.toast('Failed: ' + (data.error || ''), 'error');
+                this.toast('Failed: ' + (result.error || ''), 'error');
             }
         } catch (e) { this.toast('Error: ' + e.message, 'error'); }
     },
@@ -1509,8 +1984,12 @@ const App = {
         if (existing) existing.remove();
 
         const perms = user.permissions || {};
+        this._resetFolderTreeState();
         this._ufSelectedPaths = Array.isArray(perms.allowed_paths) ? [...perms.allowed_paths] : ['*'];
-        await this._loadRootFolders();
+        this._ufPerFolderPerms = perms.per_folder_perms ? JSON.parse(JSON.stringify(perms.per_folder_perms)) : {};
+
+        await Promise.all([this._loadFolderChildren(''), this._loadAvailableTeams()]);
+        this._ufSelectedTeams = this._getUserCurrentTeams(user.username);
 
         const overlay = document.createElement('div');
         overlay.id = 'userFormOverlay';
@@ -1521,6 +2000,8 @@ const App = {
 
         this._renderFolderPicker('uf_folder_picker');
         this._renderPermCheckboxes('uf_perms_container', perms);
+        this._renderTemplateSelector('uf_template_selector', 'edit');
+        this._renderTeamSelector('uf_team_selector');
     },
 
     async _submitEditUser(username) {
@@ -1528,19 +2009,70 @@ const App = {
         const role = document.getElementById('uf_role').value;
         const permissions = this._getFormPermissions();
 
+        this._pendingUserData = { username, display_name, role, permissions, selectedTeams: [...this._ufSelectedTeams] };
+        this._showUserSummary('edit', this._pendingUserData, username);
+    },
+
+    async _restoreEditForm(username) {
+        const data = this._pendingUserData;
+        if (!data) return;
+        const overlay = document.getElementById('userFormOverlay');
+        if (!overlay) return;
+        this._ufSelectedPaths = data.permissions.allowed_paths || ['*'];
+        this._ufPerFolderPerms = data.permissions.per_folder_perms || {};
+        this._ufSelectedTeams = data.selectedTeams || [];
+        const fakeUser = { username: data.username, display_name: data.display_name, role: data.role, permissions: data.permissions };
+        overlay.querySelector('.users-panel').outerHTML = this._userFormHtml('edit', fakeUser);
+        document.getElementById('uf_role').value = data.role;
+        this._renderFolderPicker('uf_folder_picker');
+        this._renderPermCheckboxes('uf_perms_container', data.permissions);
+        this._renderTemplateSelector('uf_template_selector', 'edit');
+        this._renderTeamSelector('uf_team_selector');
+    },
+
+    async _doUpdateUser(username) {
+        const data = this._pendingUserData;
+        if (!data) return;
         try {
             const res = await this.apiFetch('api.php', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ action: 'updateUser', username, role, display_name, permissions })
+                body: JSON.stringify({ action: 'updateUser', username, role: data.role, display_name: data.display_name, permissions: data.permissions })
             });
-            const data = await res.json();
-            if (data.success) {
+            const result = await res.json();
+            if (result.success) {
+                // Handle team membership changes
+                const currentTeams = this._getUserCurrentTeams(username);
+                const wantedTeams = data.selectedTeams || [];
+                // Add to new teams
+                for (const tid of wantedTeams) {
+                    if (!currentTeams.includes(tid)) {
+                        try {
+                            await this.apiFetch('api.php', {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({ action: 'addTeamMember', team_id: tid, username })
+                            });
+                        } catch (e) { /* ignore */ }
+                    }
+                }
+                // Remove from old teams
+                for (const tid of currentTeams) {
+                    if (!wantedTeams.includes(tid)) {
+                        try {
+                            await this.apiFetch('api.php', {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({ action: 'removeTeamMember', team_id: tid, username })
+                            });
+                        } catch (e) { /* ignore */ }
+                    }
+                }
                 this.toast('User updated', 'success');
                 document.getElementById('userFormOverlay')?.remove();
                 this.showUsersPanel();
             } else {
-                this.toast('Failed: ' + (data.error || ''), 'error');
+                this.toast('Failed: ' + (result.error || ''), 'error');
             }
         } catch (e) { this.toast('Error: ' + e.message, 'error'); }
     },
@@ -1721,8 +2253,10 @@ const App = {
 
         const isEdit = mode === 'edit';
         const perms = isEdit ? (team.permissions || {}) : this._rolePresets.employee;
+        this._resetFolderTreeState();
         this._ufSelectedPaths = isEdit ? (Array.isArray(perms.allowed_paths) ? [...perms.allowed_paths] : ['*']) : ['*'];
-        await this._loadRootFolders();
+        this._ufPerFolderPerms = isEdit && perms.per_folder_perms ? JSON.parse(JSON.stringify(perms.per_folder_perms)) : {};
+        await this._loadFolderChildren('');
 
         const title = isEdit ? `Edit Team: ${this.escHtml(team.name)}` : 'Create Team';
         const submitLabel = isEdit ? 'Save Changes' : 'Create Team';
@@ -1772,6 +2306,9 @@ const App = {
             perms[label.dataset.key] = label.querySelector('input').checked;
         });
         perms.allowed_paths = [...this._ufSelectedPaths];
+        if (Object.keys(this._ufPerFolderPerms).length > 0) {
+            perms.per_folder_perms = { ...this._ufPerFolderPerms };
+        }
         return perms;
     },
 
