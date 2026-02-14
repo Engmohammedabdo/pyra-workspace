@@ -19,17 +19,23 @@ $userData = $isLoggedIn ? sessionUserInfo() : null;
     <!-- mammoth.js for DOCX preview -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/mammoth/1.8.0/mammoth.browser.min.js" crossorigin="anonymous" defer></script>
 </head>
-<body>
+<body id="bodyEl">
 
 <?php if (!$isLoggedIn): ?>
 <!-- Login Screen -->
 <div class="login-screen" id="loginScreen">
+    <div class="login-particles">
+        <span class="particle"></span><span class="particle"></span><span class="particle"></span><span class="particle"></span>
+        <span class="particle"></span><span class="particle"></span><span class="particle"></span><span class="particle"></span>
+    </div>
     <div class="login-card">
         <div class="login-logo">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
-            </svg>
-            Pyra Workspace
+            <span class="login-logo-icon">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
+                </svg>
+            </span>
+            <span class="login-logo-text">Pyra <span class="accent">Workspace</span></span>
         </div>
         <form id="loginForm" onsubmit="return App.handleLogin(event)">
             <div class="login-field">
@@ -40,6 +46,9 @@ $userData = $isLoggedIn ? sessionUserInfo() : null;
                 <label for="loginPassword">Password</label>
                 <input type="password" id="loginPassword" name="password" autocomplete="current-password" required>
             </div>
+            <label class="login-remember">
+                <input type="checkbox" id="rememberMe"> Remember me
+            </label>
             <div class="login-error" id="loginError"></div>
             <button type="submit" class="btn btn-primary login-btn" id="loginBtn">Sign In</button>
         </form>
@@ -54,12 +63,29 @@ $userData = $isLoggedIn ? sessionUserInfo() : null;
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                     <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
                 </svg>
-                Pyra Workspace
+                Pyra <span class="logo-accent">Workspace</span>
             </div>
             <div class="breadcrumb" id="breadcrumb"></div>
             <?php if ($isLoggedIn): ?>
             <div class="user-menu" id="userMenu">
+                <button class="btn btn-ghost btn-sm btn-icon notif-bell" id="notifBell" onclick="App.showNotificationsPanel()" title="Notifications">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/>
+                        <path d="M13.73 21a2 2 0 0 1-3.46 0"/>
+                    </svg>
+                    <span class="notif-badge" id="notifBadge" style="display:none">0</span>
+                </button>
+                <div class="theme-toggle" id="themeToggle" onclick="App.toggleTheme()" title="Switch Theme">
+                    <span class="theme-toggle-icon purple">
+                        <svg viewBox="0 0 24 24" fill="currentColor" width="12" height="12"><circle cx="12" cy="12" r="5"/></svg>
+                    </span>
+                    <span class="theme-toggle-icon orange">
+                        <svg viewBox="0 0 24 24" fill="currentColor" width="12" height="12"><circle cx="12" cy="12" r="5"/></svg>
+                    </span>
+                    <span class="theme-toggle-knob"></span>
+                </div>
                 <span class="user-badge <?= htmlspecialchars($userData['role']) ?>"><?= htmlspecialchars($userData['role']) ?></span>
+                <div class="user-avatar" id="userAvatar"><?= strtoupper(substr($userData['display_name'] ?? 'U', 0, 2)) ?></div>
                 <span class="user-name"><?= htmlspecialchars($userData['display_name']) ?></span>
                 <button class="btn btn-ghost btn-sm btn-icon" onclick="App.handleLogout()" title="Sign Out">
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
@@ -97,6 +123,27 @@ $userData = $isLoggedIn ? sessionUserInfo() : null;
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
                     Users
                 </button>
+                <button class="btn" onclick="App.showTeamsPanel()">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2z"/><path d="M8 14s1.5 2 4 2 4-2 4-2"/><circle cx="9" cy="9" r="1.5"/><circle cx="15" cy="9" r="1.5"/></svg>
+                    Teams
+                </button>
+                <?php endif; ?>
+                <?php if ($isLoggedIn && ($userData['role'] ?? '') === 'admin'): ?>
+                <button class="btn" onclick="App.showTrashPanel()">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <polyline points="3 6 5 6 21 6"/>
+                        <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>
+                    </svg>
+                    Trash
+                </button>
+                <?php endif; ?>
+                <?php if ($isLoggedIn && ($userData['role'] ?? '') === 'admin'): ?>
+                <button class="btn" onclick="App.showActivityPanel()">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>
+                    </svg>
+                    Activity
+                </button>
                 <?php endif; ?>
             </div>
 
@@ -106,8 +153,24 @@ $userData = $isLoggedIn ? sessionUserInfo() : null;
                 <button class="btn btn-ghost btn-icon" onclick="App.loadFiles()" title="Refresh">
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
                 </button>
+                <div class="view-toggle" id="viewToggle">
+                    <button class="view-toggle-btn active" data-view="list" onclick="App.setView('list')" title="List View">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>
+                    </button>
+                    <button class="view-toggle-btn" data-view="grid" onclick="App.setView('grid')" title="Grid View">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>
+                    </button>
+                </div>
             </div>
 
+            <?php if ($isLoggedIn): ?>
+            <button class="btn btn-ghost btn-sm btn-icon" onclick="App.showDeepSearchModal()" title="Search All Folders (Ctrl+Shift+F)">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <circle cx="11" cy="11" r="8"/>
+                    <line x1="21" y1="21" x2="16.65" y2="16.65"/>
+                </svg>
+            </button>
+            <?php endif; ?>
             <div class="search-box">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
                 <input type="text" id="searchInput" placeholder="Search files...">
