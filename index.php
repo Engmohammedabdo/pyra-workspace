@@ -1,6 +1,7 @@
 <?php
 require_once 'config.php';
 require_once 'auth.php';
+$publicSettings = function_exists('getPublicSettings') ? getPublicSettings() : ['app_name' => 'Pyra Workspace', 'app_logo_url' => '', 'primary_color' => '#8b5cf6'];
 
 $isLoggedIn = isLoggedIn();
 $userData = $isLoggedIn ? sessionUserInfo() : null;
@@ -10,12 +11,15 @@ $userData = $isLoggedIn ? sessionUserInfo() : null;
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Pyra Workspace</title>
+    <title><?= htmlspecialchars($publicSettings['app_name'] ?? 'Pyra Workspace') ?></title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;450;500;600;700&family=JetBrains+Mono:wght@400;500&family=Noto+Sans+Arabic:wght@400;500;600;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="style.css">
     <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📁</text></svg>">
+    <?php if (!empty($publicSettings['primary_color']) && $publicSettings['primary_color'] !== '#8b5cf6'): ?>
+    <style>:root { --primary: <?= htmlspecialchars($publicSettings['primary_color']) ?>; --primary-hover: <?= htmlspecialchars($publicSettings['primary_color']) ?>dd; }</style>
+    <?php endif; ?>
     <!-- mammoth.js for DOCX preview -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/mammoth/1.8.0/mammoth.browser.min.js" crossorigin="anonymous" defer></script>
 </head>
@@ -35,7 +39,7 @@ $userData = $isLoggedIn ? sessionUserInfo() : null;
                     <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
                 </svg>
             </span>
-            <span class="login-logo-text">Pyra <span class="accent">Workspace</span></span>
+            <span class="login-logo-text"><?= htmlspecialchars($publicSettings['app_name'] ?? 'Pyra Workspace') ?></span>
         </div>
         <form id="loginForm" onsubmit="return App.handleLogin(event)">
             <div class="login-field">
@@ -63,7 +67,7 @@ $userData = $isLoggedIn ? sessionUserInfo() : null;
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                     <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
                 </svg>
-                Pyra <span class="logo-accent">Workspace</span>
+                <?= htmlspecialchars($publicSettings['app_name'] ?? 'Pyra Workspace') ?>
             </div>
             <div class="breadcrumb" id="breadcrumb"></div>
             <?php if ($isLoggedIn): ?>
@@ -97,6 +101,10 @@ $userData = $isLoggedIn ? sessionUserInfo() : null;
         <!-- Toolbar -->
         <div class="toolbar">
             <div class="toolbar-group">
+                <button class="btn" onclick="App.showDashboard()" title="Dashboard">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>
+                    Dashboard
+                </button>
                 <button class="btn" onclick="App.goBack()" title="Go Back (Alt+Left)">
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="15 18 9 12 15 6"/></svg>
                     Back
@@ -143,6 +151,12 @@ $userData = $isLoggedIn ? sessionUserInfo() : null;
                         <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>
                     </svg>
                     Activity
+                </button>
+                <?php endif; ?>
+                <?php if ($isLoggedIn && ($userData['role'] ?? '') === 'admin'): ?>
+                <button class="btn" onclick="App.showSettingsPanel()">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+                    Settings
                 </button>
                 <?php endif; ?>
             </div>
@@ -254,7 +268,9 @@ $userData = $isLoggedIn ? sessionUserInfo() : null;
             bucket: '<?= defined("SUPABASE_BUCKET") ? SUPABASE_BUCKET : "" ?>',
             maxUploadSize: <?= defined("MAX_UPLOAD_SIZE") ? MAX_UPLOAD_SIZE : 524288000 ?>,
             auth: <?= $isLoggedIn ? 'true' : 'false' ?>,
-            user: <?= $isLoggedIn ? json_encode($userData) : 'null' ?>
+            user: <?= $isLoggedIn ? json_encode($userData) : 'null' ?>,
+            csrf_token: '<?= $_SESSION['csrf_token'] ?? '' ?>',
+            settings: <?= json_encode($publicSettings) ?>
         };
     </script>
     <script src="app.js"></script>
