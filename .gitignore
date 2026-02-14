@@ -16,3 +16,7 @@ config.php
 nul
 *.tmp
 *.log
+*.bak
+
+# Claude Code
+.claude/
