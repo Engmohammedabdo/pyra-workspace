@@ -449,10 +449,6 @@ switch ($action) {
         break;
 
     case 'upload':
-        if (!hasPermission('can_upload')) {
-            echo json_encode(['success' => false, 'error' => 'Upload not permitted']);
-            break;
-        }
         if (!isset($_FILES['file'])) {
             echo json_encode(['success' => false, 'error' => 'No file provided']);
             break;
@@ -460,6 +456,10 @@ switch ($action) {
         $prefix = sanitizePath($_POST['prefix'] ?? '');
         if (!canAccessPath($prefix)) {
             echo json_encode(['success' => false, 'error' => 'Access denied to this path']);
+            break;
+        }
+        if (!hasPathPermission('can_upload', $prefix)) {
+            echo json_encode(['success' => false, 'error' => 'Upload not permitted for this folder']);
             break;
         }
 
@@ -498,10 +498,6 @@ switch ($action) {
         break;
 
     case 'delete':
-        if (!hasPermission('can_delete')) {
-            echo json_encode(['success' => false, 'error' => 'Delete not permitted']);
-            break;
-        }
         $path = sanitizePath($_POST['path'] ?? '');
         $fileSize = (int)($_POST['fileSize'] ?? 0);
         $mimeType = $_POST['mimeType'] ?? 'application/octet-stream';
@@ -513,6 +509,10 @@ switch ($action) {
             echo json_encode(['success' => false, 'error' => 'Access denied']);
             break;
         }
+        if (!hasPathPermission('can_delete', $path)) {
+            echo json_encode(['success' => false, 'error' => 'Delete not permitted for this folder']);
+            break;
+        }
         $result = moveToTrash($path, $fileSize, $mimeType);
         if ($result['success']) {
             logActivity('delete', $path, ['moved_to_trash' => true]);
@@ -521,10 +521,6 @@ switch ($action) {
         break;
 
     case 'rename':
-        if (!hasPermission('can_edit')) {
-            echo json_encode(['success' => false, 'error' => 'Edit not permitted']);
-            break;
-        }
         $oldPath = sanitizePath($_POST['oldPath'] ?? '');
         $newPath = sanitizePath($_POST['newPath'] ?? '');
         if (!$oldPath || !$newPath) {
@@ -533,6 +529,10 @@ switch ($action) {
         }
         if (!canAccessPath($oldPath) || !canAccessPath($newPath)) {
             echo json_encode(['success' => false, 'error' => 'Access denied']);
+            break;
+        }
+        if (!hasPathPermission('can_edit', $oldPath)) {
+            echo json_encode(['success' => false, 'error' => 'Edit not permitted for this folder']);
             break;
         }
         $result = renameFile($oldPath, $newPath);
@@ -561,10 +561,6 @@ switch ($action) {
         break;
 
     case 'save':
-        if (!hasPermission('can_edit')) {
-            echo json_encode(['success' => false, 'error' => 'Edit not permitted']);
-            break;
-        }
         $path = sanitizePath($_POST['path'] ?? '');
         $content = $_POST['content'] ?? '';
         $mimeType = $_POST['mimeType'] ?? 'text/plain';
@@ -576,6 +572,10 @@ switch ($action) {
             echo json_encode(['success' => false, 'error' => 'Access denied']);
             break;
         }
+        if (!hasPathPermission('can_edit', $path)) {
+            echo json_encode(['success' => false, 'error' => 'Edit not permitted for this folder']);
+            break;
+        }
         $result = saveFileContent($path, $content, $mimeType);
         if ($result['success']) {
             logActivity('save_file', $path);
@@ -584,10 +584,6 @@ switch ($action) {
         break;
 
     case 'createFolder':
-        if (!hasPermission('can_create_folder')) {
-            echo json_encode(['success' => false, 'error' => 'Folder creation not permitted']);
-            break;
-        }
         $prefix = sanitizePath($_POST['prefix'] ?? '');
         $folderName = sanitizePath($_POST['folderName'] ?? '');
         if (!$folderName) {
@@ -596,6 +592,10 @@ switch ($action) {
         }
         if (!canAccessPath($prefix)) {
             echo json_encode(['success' => false, 'error' => 'Access denied']);
+            break;
+        }
+        if (!hasPathPermission('can_create_folder', $prefix)) {
+            echo json_encode(['success' => false, 'error' => 'Folder creation not permitted for this path']);
             break;
         }
         $result = createFolder($prefix, $folderName);
@@ -649,9 +649,9 @@ switch ($action) {
             echo 'Access denied';
             exit;
         }
-        if (!hasPermission('can_download')) {
+        if (!hasPathPermission('can_download', $path)) {
             http_response_code(403);
-            echo 'Download not permitted';
+            echo 'Download not permitted for this folder';
             exit;
         }
         $result = getFileContent($path);
@@ -679,10 +679,6 @@ switch ($action) {
         break;
 
     case 'deleteBatch':
-        if (!hasPermission('can_delete')) {
-            echo json_encode(['success' => false, 'error' => 'Delete not permitted']);
-            break;
-        }
         $paths = json_decode($_POST['paths'] ?? '[]', true);
         if (!is_array($paths) || count($paths) === 0) {
             echo json_encode(['success' => false, 'error' => 'No paths provided']);
@@ -691,7 +687,7 @@ switch ($action) {
         $results = [];
         foreach ($paths as $p) {
             $safePath = sanitizePath($p);
-            if ($safePath && canAccessPath($safePath)) {
+            if ($safePath && canAccessPath($safePath) && hasPathPermission('can_delete', $safePath)) {
                 $trashResult = moveToTrash($safePath);
                 if ($trashResult['success']) {
                     logActivity('delete', $safePath, ['moved_to_trash' => true, 'batch' => true]);
@@ -715,10 +711,6 @@ switch ($action) {
         break;
 
     case 'addReview':
-        if (!hasPermission('can_review') && !isAdmin()) {
-            echo json_encode(['success' => false, 'error' => 'Review not permitted']);
-            break;
-        }
         $input = $jsonBody;
         $path = sanitizePath($input['path'] ?? '');
         $type = $input['type'] ?? 'comment';
@@ -726,6 +718,10 @@ switch ($action) {
 
         if (!$path || !canAccessPath($path)) {
             echo json_encode(['success' => false, 'error' => 'Access denied']);
+            break;
+        }
+        if (!hasPathPermission('can_review', $path) && !isAdmin()) {
+            echo json_encode(['success' => false, 'error' => 'Review not permitted for this folder']);
             break;
         }
         if ($type === 'comment' && $text === '') {
@@ -953,10 +949,6 @@ switch ($action) {
     // === Share Links ===
 
     case 'createShareLink':
-        if (!isAdmin() && !hasPermission('can_download')) {
-            echo json_encode(['success' => false, 'error' => 'Not permitted']);
-            break;
-        }
         $input = $jsonBody;
         $path = sanitizePath($input['path'] ?? '');
         $fileName = $input['fileName'] ?? basename($path);
@@ -968,6 +960,10 @@ switch ($action) {
         }
         if (!canAccessPath($path)) {
             echo json_encode(['success' => false, 'error' => 'Access denied']);
+            break;
+        }
+        if (!isAdmin() && !hasPathPermission('can_download', $path)) {
+            echo json_encode(['success' => false, 'error' => 'Not permitted for this folder']);
             break;
         }
         if ($expiresInHours < 1 || $expiresInHours > 720) {
