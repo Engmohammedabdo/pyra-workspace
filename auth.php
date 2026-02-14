@@ -485,15 +485,17 @@ function indexFile(array $fileData): void {
     $fileName = basename($filePath);
     $folderPath = dirname($filePath);
     if ($folderPath === '.') $folderPath = '';
+    $originalName = $fileData['original_name'] ?? null;
 
     $record = [
         'id' => $id,
         'file_path' => $filePath,
         'file_name' => $fileName,
-        'file_name_lower' => strtolower($fileName),
+        'file_name_lower' => strtolower($originalName ?: $fileName),
         'folder_path' => $folderPath,
         'file_size' => $fileData['file_size'] ?? 0,
         'mime_type' => $fileData['mime_type'] ?? '',
+        'original_name' => $originalName,
         'updated_at' => date('c')
     ];
 
@@ -505,6 +507,22 @@ function indexFile(array $fileData): void {
     } else {
         dbRequest('POST', '/pyra_file_index', $record);
     }
+}
+
+function getOriginalNames(array $paths): array {
+    $map = [];
+    if (empty($paths)) return $map;
+    // Query file index for original names (batch)
+    $orFilter = implode(',', array_map(function($p) { return 'file_path.eq.' . rawurlencode($p); }, $paths));
+    $result = dbRequest('GET', '/pyra_file_index?or=(' . $orFilter . ')&select=file_path,original_name&original_name=not.is.null');
+    if ($result['httpCode'] === 200 && is_array($result['data'])) {
+        foreach ($result['data'] as $row) {
+            if (!empty($row['original_name'])) {
+                $map[$row['file_path']] = $row['original_name'];
+            }
+        }
+    }
+    return $map;
 }
 
 function removeFileIndex(string $filePath): void {

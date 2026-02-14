@@ -262,8 +262,6 @@ function uploadFile(string $prefix, array $file): array {
         createFileVersion($filePath);
     }
 
-    $endpoint = '/object/' . SUPABASE_BUCKET . '/' . rawurlencode($filePath);
-
     $finfo = finfo_open(FILEINFO_MIME_TYPE);
     $mimeType = finfo_file($finfo, $file['tmp_name']);
     finfo_close($finfo);
@@ -288,7 +286,8 @@ function uploadFile(string $prefix, array $file): array {
         indexFile([
             'file_path' => $filePath,
             'file_size' => strlen($fileContent),
-            'mime_type' => $mimeType
+            'mime_type' => $mimeType,
+            'original_name' => ($originalName !== $safeName) ? $originalName : null
         ]);
         return ['success' => true, 'path' => $filePath, 'original_name' => $originalName, 'safe_name' => $safeName];
     }
@@ -528,12 +527,12 @@ switch ($action) {
         }
         $result = listFiles($prefix);
         if ($result['success']) {
-            // Hide .trash folder from normal listing
+            // Hide .trash and .versions folders from normal listing
             $result['folders'] = array_values(array_filter($result['folders'], function($f) {
-                return $f['name'] !== '.trash';
+                return $f['name'] !== '.trash' && $f['name'] !== '.versions';
             }));
             $result['files'] = array_values(array_filter($result['files'], function($f) {
-                return strpos($f['path'], '.trash/') !== 0;
+                return strpos($f['path'], '.trash/') !== 0 && strpos($f['path'], '.versions/') !== 0;
             }));
             // Filter for non-admin users
             if (!isAdmin()) {
@@ -543,6 +542,17 @@ switch ($action) {
                 $result['files'] = array_values(array_filter($result['files'], function($f) {
                     return isPathDirectlyAllowed($f['path']);
                 }));
+            }
+            // Enrich files with original names from index
+            if (!empty($result['files'])) {
+                $paths = array_map(function($f) { return $f['path']; }, $result['files']);
+                $originalNames = getOriginalNames($paths);
+                foreach ($result['files'] as &$f) {
+                    if (isset($originalNames[$f['path']])) {
+                        $f['display_name'] = $originalNames[$f['path']];
+                    }
+                }
+                unset($f);
             }
         }
         echo json_encode($result);

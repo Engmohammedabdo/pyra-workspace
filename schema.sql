@@ -162,6 +162,7 @@ CREATE TABLE IF NOT EXISTS pyra_file_index (
     folder_path TEXT NOT NULL DEFAULT '',
     file_size BIGINT DEFAULT 0,
     mime_type VARCHAR(100) DEFAULT '',
+    original_name VARCHAR(500) DEFAULT NULL,
     updated_at TIMESTAMPTZ DEFAULT NOW(),
     indexed_at TIMESTAMPTZ DEFAULT NOW()
 );

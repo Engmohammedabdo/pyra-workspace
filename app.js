@@ -641,14 +641,14 @@ const App = {
         const searchVal = document.getElementById('searchInput').value.toLowerCase();
 
         let filteredFolders = this.folders.filter(f => {
-            if (f.name === '.keep') return false;
+            if (f.name === '.keep' || f.name === '.versions' || f.name === '.trash') return false;
             if (searchVal && !f.name.toLowerCase().includes(searchVal)) return false;
             return true;
         });
 
         let filteredFiles = this.files.filter(f => {
             if (f.name === '.keep') return false;
-            if (searchVal && !f.name.toLowerCase().includes(searchVal)) return false;
+            if (searchVal && !(f.display_name || f.name).toLowerCase().includes(searchVal)) return false;
             return true;
         });
 
@@ -706,6 +706,7 @@ const App = {
     },
 
     renderFileItem(f) {
+        const displayName = f.display_name || f.name;
         const iconInfo = this.getFileIcon(f.name, f.mimetype);
         const selected = this.selectedFile && this.selectedFile.path === f.path ? 'selected' : '';
         const fJson = this.escAttr(JSON.stringify(f));
@@ -723,7 +724,7 @@ const App = {
 
         return `<div class="file-item ${selected}" onclick="App.previewFile(${fJson})" oncontextmenu="App.showContextMenu(event, 'file', ${fJson})">
             <div class="file-icon ${iconInfo.class}">${iconInfo.icon}</div>
-            <div class="file-name">${this.escHtml(f.name)}</div>
+            <div class="file-name">${this.wrapWithDir(this.escHtml(displayName))}</div>
             <div class="file-size">${this.formatSize(f.size)}</div>
             <div class="file-date">${this.formatDate(f.updated_at)}</div>
             <div class="file-actions-col">
@@ -775,7 +776,7 @@ const App = {
         const actions = document.getElementById('previewActions');
         const fileInfo = document.getElementById('previewFileInfo');
 
-        title.textContent = file.name;
+        title.textContent = file.display_name || file.name;
         panel.classList.add('open');
 
         if (fileInfo) {
