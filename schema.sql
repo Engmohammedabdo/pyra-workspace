@@ -16,7 +16,7 @@ CREATE TABLE IF NOT EXISTS pyra_users (
     created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
--- Reviews table
+-- Reviews table (with threaded replies via parent_id)
 CREATE TABLE IF NOT EXISTS pyra_reviews (
     id VARCHAR(20) PRIMARY KEY,
     file_path TEXT NOT NULL,
@@ -25,6 +25,7 @@ CREATE TABLE IF NOT EXISTS pyra_reviews (
     type VARCHAR(20) NOT NULL CHECK (type IN ('comment', 'approval')),
     text TEXT DEFAULT '',
     resolved BOOLEAN DEFAULT FALSE,
+    parent_id VARCHAR(20) DEFAULT NULL,
     created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
@@ -133,12 +134,98 @@ CREATE TABLE IF NOT EXISTS pyra_file_permissions (
 );
 
 -- ============================================
+-- File Version History
+-- ============================================
+
+CREATE TABLE IF NOT EXISTS pyra_file_versions (
+    id VARCHAR(30) PRIMARY KEY,
+    file_path TEXT NOT NULL,
+    version_path TEXT NOT NULL,
+    version_number INT NOT NULL DEFAULT 1,
+    file_size BIGINT DEFAULT 0,
+    mime_type VARCHAR(100) DEFAULT '',
+    created_by VARCHAR(50) NOT NULL,
+    created_by_display VARCHAR(100) NOT NULL,
+    comment TEXT DEFAULT '',
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- ============================================
+-- File Search Index
+-- ============================================
+
+CREATE TABLE IF NOT EXISTS pyra_file_index (
+    id VARCHAR(30) PRIMARY KEY,
+    file_path TEXT NOT NULL UNIQUE,
+    file_name VARCHAR(500) NOT NULL,
+    file_name_lower VARCHAR(500) NOT NULL,
+    folder_path TEXT NOT NULL DEFAULT '',
+    file_size BIGINT DEFAULT 0,
+    mime_type VARCHAR(100) DEFAULT '',
+    updated_at TIMESTAMPTZ DEFAULT NOW(),
+    indexed_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- ============================================
+-- System Settings
+-- ============================================
+
+CREATE TABLE IF NOT EXISTS pyra_settings (
+    key VARCHAR(100) PRIMARY KEY,
+    value TEXT NOT NULL DEFAULT '',
+    updated_by VARCHAR(50) DEFAULT '',
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Default settings
+INSERT INTO pyra_settings (key, value) VALUES
+    ('app_name', 'Pyra Workspace'),
+    ('app_logo_url', ''),
+    ('primary_color', '#8b5cf6'),
+    ('max_upload_size', '524288000'),
+    ('allow_public_shares', 'true'),
+    ('share_default_expiry_hours', '24'),
+    ('session_timeout_minutes', '480'),
+    ('max_failed_logins', '5'),
+    ('lockout_duration_minutes', '15'),
+    ('auto_version_on_upload', 'true'),
+    ('max_versions_per_file', '10'),
+    ('trash_auto_purge_days', '30')
+ON CONFLICT (key) DO NOTHING;
+
+-- ============================================
+-- Session Management
+-- ============================================
+
+CREATE TABLE IF NOT EXISTS pyra_sessions (
+    id VARCHAR(128) PRIMARY KEY,
+    username VARCHAR(50) NOT NULL,
+    ip_address VARCHAR(45) DEFAULT '',
+    user_agent TEXT DEFAULT '',
+    last_activity TIMESTAMPTZ DEFAULT NOW(),
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- ============================================
+-- Login Attempts (Rate Limiting)
+-- ============================================
+
+CREATE TABLE IF NOT EXISTS pyra_login_attempts (
+    id SERIAL PRIMARY KEY,
+    username VARCHAR(50) NOT NULL,
+    ip_address VARCHAR(45) DEFAULT '',
+    success BOOLEAN DEFAULT FALSE,
+    attempted_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- ============================================
 -- Indexes
 -- ============================================
 
 -- Core indexes
 CREATE INDEX IF NOT EXISTS idx_reviews_file_path ON pyra_reviews(file_path);
 CREATE INDEX IF NOT EXISTS idx_reviews_username ON pyra_reviews(username);
+CREATE INDEX IF NOT EXISTS idx_reviews_parent ON pyra_reviews(parent_id);
 CREATE INDEX IF NOT EXISTS idx_users_username ON pyra_users(username);
 
 -- Trash indexes
@@ -171,6 +258,23 @@ CREATE INDEX IF NOT EXISTS idx_fileperm_path ON pyra_file_permissions(file_path)
 CREATE INDEX IF NOT EXISTS idx_fileperm_target ON pyra_file_permissions(target_type, target_id);
 CREATE INDEX IF NOT EXISTS idx_fileperm_expires ON pyra_file_permissions(expires_at);
 
+-- File version indexes
+CREATE INDEX IF NOT EXISTS idx_versions_path ON pyra_file_versions(file_path);
+CREATE INDEX IF NOT EXISTS idx_versions_created ON pyra_file_versions(created_at DESC);
+
+-- File search index indexes
+CREATE INDEX IF NOT EXISTS idx_fileindex_name ON pyra_file_index(file_name_lower);
+CREATE INDEX IF NOT EXISTS idx_fileindex_path ON pyra_file_index(file_path);
+CREATE INDEX IF NOT EXISTS idx_fileindex_folder ON pyra_file_index(folder_path);
+
+-- Session indexes
+CREATE INDEX IF NOT EXISTS idx_sessions_user ON pyra_sessions(username);
+CREATE INDEX IF NOT EXISTS idx_sessions_activity ON pyra_sessions(last_activity);
+
+-- Login attempt indexes
+CREATE INDEX IF NOT EXISTS idx_login_attempts_user ON pyra_login_attempts(username);
+CREATE INDEX IF NOT EXISTS idx_login_attempts_time ON pyra_login_attempts(attempted_at);
+
 -- ============================================
 -- Disable RLS (app uses service_role key)
 -- ============================================
@@ -184,3 +288,8 @@ ALTER TABLE pyra_share_links DISABLE ROW LEVEL SECURITY;
 ALTER TABLE pyra_teams DISABLE ROW LEVEL SECURITY;
 ALTER TABLE pyra_team_members DISABLE ROW LEVEL SECURITY;
 ALTER TABLE pyra_file_permissions DISABLE ROW LEVEL SECURITY;
+ALTER TABLE pyra_file_versions DISABLE ROW LEVEL SECURITY;
+ALTER TABLE pyra_file_index DISABLE ROW LEVEL SECURITY;
+ALTER TABLE pyra_settings DISABLE ROW LEVEL SECURITY;
+ALTER TABLE pyra_sessions DISABLE ROW LEVEL SECURITY;
+ALTER TABLE pyra_login_attempts DISABLE ROW LEVEL SECURITY;
