@@ -229,6 +229,11 @@ function requireAuth(): void {
 
 // === Authorization ===
 
+/**
+ * Check if user can access a path (navigate/browse).
+ * Parent paths of allowed folders are browsable but NOT writable.
+ * Use isPathDirectlyAllowed() for write operations.
+ */
 function canAccessPath(string $path): bool {
     $permissions = $_SESSION['permissions'] ?? [];
     $allowed = $permissions['allowed_paths'] ?? [];
@@ -246,8 +251,34 @@ function canAccessPath(string $path): bool {
         // Path is inside allowed prefix
         if ($pathNorm !== '' && strpos($pathNorm . '/', $prefixNorm . '/') === 0) return true;
 
-        // Path is a parent of an allowed prefix (so client can navigate down to their folder)
+        // Path is a parent of an allowed prefix (browse-only, for navigation)
         if ($pathNorm === '' || strpos($prefixNorm . '/', $pathNorm . '/') === 0) return true;
+    }
+    return false;
+}
+
+/**
+ * Check if user has DIRECT access to a path (not just browse-through).
+ * Returns true only if path IS or is INSIDE an allowed path.
+ * Use this for write operations (upload, edit, delete, create folder).
+ */
+function isPathDirectlyAllowed(string $path): bool {
+    if (isAdmin()) return true;
+    $permissions = $_SESSION['permissions'] ?? [];
+    $allowed = $permissions['allowed_paths'] ?? [];
+
+    if (in_array('*', $allowed)) return true;
+
+    $pathNorm = rtrim($path, '/');
+
+    foreach ($allowed as $prefix) {
+        $prefixNorm = rtrim($prefix, '/');
+
+        // Direct match
+        if ($pathNorm === $prefixNorm) return true;
+
+        // Path is inside allowed prefix
+        if ($pathNorm !== '' && strpos($pathNorm . '/', $prefixNorm . '/') === 0) return true;
     }
     return false;
 }
@@ -347,21 +378,6 @@ function hasPathPermission(string $perm, string $path): bool {
         if ($filePerm && !empty($filePerm[$perm])) return true;
     }
 
-    return false;
-}
-
-function isPathDirectlyAllowed(string $path): bool {
-    $permissions = $_SESSION['permissions'] ?? [];
-    $allowed = $permissions['allowed_paths'] ?? [];
-    if (in_array('*', $allowed)) return true;
-
-    $pathNorm = rtrim($path, '/');
-    foreach ($allowed as $prefix) {
-        $prefixNorm = rtrim($prefix, '/');
-        if ($pathNorm === $prefixNorm || strpos($pathNorm . '/', $prefixNorm . '/') === 0) {
-            return true;
-        }
-    }
     return false;
 }
 
@@ -1195,18 +1211,18 @@ function cleanExpiredFilePermissions(): int {
     return 0;
 }
 
-// Enhanced path access check with team and file-level permissions
+/**
+ * Enhanced path access check (browse + navigate).
+ * Includes parent-path browse-through for navigation.
+ */
 function canAccessPathEnhanced(string $path): bool {
-    // Admin always has access
     if (isAdmin()) return true;
-
-    // 1. Standard user permissions (original check)
     if (canAccessPath($path)) return true;
 
     $username = $_SESSION['user'] ?? '';
     if (!$username) return false;
 
-    // 2. Check team permissions
+    // Check team permissions (with browse-through for parent paths)
     $userTeams = getUserTeams($username);
     foreach ($userTeams as $team) {
         $teamPerms = $team['permissions'] ?? [];
@@ -1221,7 +1237,42 @@ function canAccessPathEnhanced(string $path): bool {
         }
     }
 
-    // 3. Check file-level permissions
+    // Check file-level permissions
+    $filePerm = getEffectiveFilePermissions($path, $username);
+    if ($filePerm !== null) return true;
+
+    return false;
+}
+
+/**
+ * STRICT path access check for write operations (upload, edit, delete, create).
+ * Does NOT allow parent browse-through. Path must be AT or INSIDE allowed path.
+ */
+function canWritePath(string $path): bool {
+    if (isAdmin()) return true;
+
+    // 1. User direct access
+    if (isPathDirectlyAllowed($path)) return true;
+
+    $username = $_SESSION['user'] ?? '';
+    if (!$username) return false;
+
+    $pathNorm = rtrim($path, '/');
+
+    // 2. Team direct access (NO parent browse-through)
+    $userTeams = getUserTeams($username);
+    foreach ($userTeams as $team) {
+        $teamPerms = $team['permissions'] ?? [];
+        $teamPaths = $teamPerms['allowed_paths'] ?? [];
+        if (in_array('*', $teamPaths)) return true;
+        foreach ($teamPaths as $prefix) {
+            $prefixNorm = rtrim($prefix, '/');
+            if ($pathNorm === $prefixNorm) return true;
+            if ($pathNorm !== '' && strpos($pathNorm . '/', $prefixNorm . '/') === 0) return true;
+        }
+    }
+
+    // 3. File-level permissions
     $filePerm = getEffectiveFilePermissions($path, $username);
     if ($filePerm !== null) return true;
 

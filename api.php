@@ -564,7 +564,7 @@ switch ($action) {
             break;
         }
         $prefix = sanitizePath($_POST['prefix'] ?? '');
-        if (!canAccessPathEnhanced($prefix)) {
+        if (!canWritePath($prefix)) {
             echo json_encode(['success' => false, 'error' => 'Access denied to this path']);
             break;
         }
@@ -615,7 +615,7 @@ switch ($action) {
             echo json_encode(['success' => false, 'error' => 'No path provided']);
             break;
         }
-        if (!canAccessPathEnhanced($path)) {
+        if (!canWritePath($path)) {
             echo json_encode(['success' => false, 'error' => 'Access denied']);
             break;
         }
@@ -637,7 +637,7 @@ switch ($action) {
             echo json_encode(['success' => false, 'error' => 'Paths required']);
             break;
         }
-        if (!canAccessPathEnhanced($oldPath) || !canAccessPathEnhanced($newPath)) {
+        if (!canWritePath($oldPath) || !canWritePath($newPath)) {
             echo json_encode(['success' => false, 'error' => 'Access denied']);
             break;
         }
@@ -678,7 +678,7 @@ switch ($action) {
             echo json_encode(['success' => false, 'error' => 'No path provided']);
             break;
         }
-        if (!canAccessPathEnhanced($path)) {
+        if (!canWritePath($path)) {
             echo json_encode(['success' => false, 'error' => 'Access denied']);
             break;
         }
@@ -701,7 +701,7 @@ switch ($action) {
             echo json_encode(['success' => false, 'error' => 'Folder name required']);
             break;
         }
-        if (!canAccessPathEnhanced($prefix)) {
+        if (!canWritePath($prefix)) {
             echo json_encode(['success' => false, 'error' => 'Access denied']);
             break;
         }
@@ -798,7 +798,7 @@ switch ($action) {
         $results = [];
         foreach ($paths as $p) {
             $safePath = sanitizePath($p);
-            if ($safePath && canAccessPathEnhanced($safePath) && hasPathPermission('can_delete', $safePath)) {
+            if ($safePath && canWritePath($safePath) && hasPathPermission('can_delete', $safePath)) {
                 $trashResult = moveToTrash($safePath);
                 if ($trashResult['success']) {
                     logActivity('delete', $safePath, ['moved_to_trash' => true, 'batch' => true]);
@@ -1091,7 +1091,7 @@ switch ($action) {
             echo json_encode(['success' => false, 'error' => 'Path required']);
             break;
         }
-        if (!canAccessPathEnhanced($path)) {
+        if (!canWritePath($path)) {
             echo json_encode(['success' => false, 'error' => 'Access denied']);
             break;
         }
@@ -1598,7 +1598,7 @@ switch ($action) {
         $originalPath = $ver['file_path'];
         $versionPath = $ver['version_path'];
 
-        if (!canAccessPathEnhanced($originalPath)) {
+        if (!canWritePath($originalPath)) {
             echo json_encode(['success' => false, 'error' => 'Access denied']);
             break;
         }
