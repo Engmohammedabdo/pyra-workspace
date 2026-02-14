@@ -214,7 +214,8 @@ function sessionUserInfo(): array {
         'username' => $_SESSION['user'] ?? '',
         'role' => $_SESSION['role'] ?? '',
         'display_name' => $_SESSION['display_name'] ?? '',
-        'permissions' => $_SESSION['permissions'] ?? []
+        'permissions' => $_SESSION['permissions'] ?? [],
+        'csrf_token' => $_SESSION['csrf_token'] ?? ''
     ];
 }
 

@@ -209,8 +209,31 @@ function createFileVersion(string $filePath): bool {
     return false;
 }
 
+function sanitizeFileName(string $name): string {
+    // Replace Arabic/Unicode spaces with underscore, keep extension
+    $ext = pathinfo($name, PATHINFO_EXTENSION);
+    $base = pathinfo($name, PATHINFO_FILENAME);
+    // Transliterate: replace non-ASCII chars with hex-encoded short hash
+    if (preg_match('/[^\x20-\x7E]/', $base)) {
+        // Keep original name readable: replace non-ASCII with underscore-separated hex
+        $safe = preg_replace('/[^\w\-.]/', '_', $base);
+        // If entire name became underscores, use a hash of the original
+        $safe = trim($safe, '_');
+        if (empty($safe) || preg_match('/^_+$/', $safe)) {
+            $safe = 'file_' . substr(md5($base), 0, 10);
+        }
+        // Append short hash of original to ensure uniqueness
+        $safe .= '_' . substr(md5($base), 0, 6);
+        return $ext ? $safe . '.' . $ext : $safe;
+    }
+    return $name;
+}
+
 function uploadFile(string $prefix, array $file): array {
-    $filePath = $prefix ? $prefix . '/' . $file['name'] : $file['name'];
+    // Sanitize filename for Supabase Storage compatibility (no Arabic/Unicode chars in key)
+    $originalName = $file['name'];
+    $safeName = sanitizeFileName($originalName);
+    $filePath = $prefix ? $prefix . '/' . $safeName : $safeName;
 
     // Auto-versioning: check if file exists and create version before overwrite
     $autoVersion = getSetting('auto_version_on_upload', 'true') === 'true';
@@ -258,11 +281,12 @@ function uploadFile(string $prefix, array $file): array {
             'file_size' => strlen($fileContent),
             'mime_type' => $mimeType
         ]);
-        return ['success' => true, 'path' => $filePath];
+        return ['success' => true, 'path' => $filePath, 'original_name' => $originalName, 'safe_name' => $safeName];
     }
 
     $data = json_decode($response, true);
-    return ['success' => false, 'error' => $data['message'] ?? 'Upload failed (HTTP ' . $httpCode . ')'];
+    $errMsg = $data['message'] ?? $data['error'] ?? 'Upload failed (HTTP ' . $httpCode . ')';
+    return ['success' => false, 'error' => $errMsg, 'original_name' => $originalName];
 }
 
 function deleteFile(string $filePath): array {
