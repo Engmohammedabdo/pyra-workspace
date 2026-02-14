@@ -202,6 +202,7 @@ $userData = $isLoggedIn ? sessionUserInfo() : null;
                 <div class="file-list-header">
                     <span></span>
                     <span class="sortable" onclick="App.toggleSort('name')">Name <span id="sortIndicatorName"></span></span>
+                    <span></span>
                     <span class="sortable" style="text-align:right" onclick="App.toggleSort('size')">Size <span id="sortIndicatorSize"></span></span>
                     <span class="sortable col-date" style="text-align:right" onclick="App.toggleSort('date')">Modified <span id="sortIndicatorDate"></span></span>
                     <span></span>

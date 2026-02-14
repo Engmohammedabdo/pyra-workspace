@@ -93,6 +93,23 @@ function getAllUsers(): array {
     return [];
 }
 
+function getAllUsersLite(): array {
+    $result = dbRequest('GET', '/pyra_users?select=username,display_name&order=display_name.asc');
+    return ($result['httpCode'] === 200 && is_array($result['data'])) ? $result['data'] : [];
+}
+
+function parseMentions(string $text): array {
+    $mentions = [];
+    if (preg_match_all('/@([a-zA-Z0-9_]+)/', $text, $matches)) {
+        foreach (array_unique($matches[1]) as $username) {
+            if (findUser($username)) {
+                $mentions[] = $username;
+            }
+        }
+    }
+    return $mentions;
+}
+
 function createUser(string $username, string $password, string $role, string $displayName, array $permissions): array {
     $existing = findUser($username);
     if ($existing) {
@@ -1302,4 +1319,57 @@ function hasPermissionEnhanced(string $perm, string $filePath = ''): bool {
     }
 
     return false;
+}
+
+// === Favorites ===
+
+function generateFavoriteId(): string {
+    return 'fav_' . time() . '_' . substr(bin2hex(random_bytes(3)), 0, 5);
+}
+
+function addFavoriteItem(string $username, string $filePath, string $itemType = 'file', string $displayName = ''): array {
+    $record = [
+        'id' => generateFavoriteId(),
+        'username' => $username,
+        'file_path' => $filePath,
+        'item_type' => $itemType,
+        'display_name' => $displayName
+    ];
+    $result = dbRequest('POST', '/pyra_favorites', $record, ['Prefer: return=representation']);
+    if ($result['httpCode'] === 201) {
+        return ['success' => true];
+    }
+    $err = is_array($result['data']) ? ($result['data']['message'] ?? '') : '';
+    if (strpos($err, 'duplicate') !== false || strpos($err, 'unique') !== false || $result['httpCode'] === 409) {
+        return ['success' => false, 'error' => 'Already in favorites'];
+    }
+    return ['success' => false, 'error' => $err ?: 'Failed to add favorite'];
+}
+
+function removeFavoriteItem(string $username, string $filePath): array {
+    $result = dbRequest('DELETE', '/pyra_favorites?username=eq.' . rawurlencode($username) . '&file_path=eq.' . rawurlencode($filePath));
+    if ($result['httpCode'] === 200 || $result['httpCode'] === 204) {
+        return ['success' => true];
+    }
+    return ['success' => false, 'error' => 'Failed to remove favorite'];
+}
+
+function getUserFavorites(string $username): array {
+    $result = dbRequest('GET', '/pyra_favorites?username=eq.' . rawurlencode($username) . '&order=created_at.desc');
+    if ($result['httpCode'] === 200 && is_array($result['data'])) {
+        return $result['data'];
+    }
+    return [];
+}
+
+function getUserFavoritePaths(string $username): array {
+    $result = dbRequest('GET', '/pyra_favorites?username=eq.' . rawurlencode($username) . '&select=file_path');
+    if ($result['httpCode'] === 200 && is_array($result['data'])) {
+        return array_column($result['data'], 'file_path');
+    }
+    return [];
+}
+
+function cleanupDeletedFavorites(string $filePath): void {
+    dbRequest('DELETE', '/pyra_favorites?file_path=eq.' . rawurlencode($filePath));
 }

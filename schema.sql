@@ -276,6 +276,19 @@ CREATE INDEX IF NOT EXISTS idx_sessions_activity ON pyra_sessions(last_activity)
 CREATE INDEX IF NOT EXISTS idx_login_attempts_user ON pyra_login_attempts(username);
 CREATE INDEX IF NOT EXISTS idx_login_attempts_time ON pyra_login_attempts(attempted_at);
 
+-- Favorites
+CREATE TABLE IF NOT EXISTS pyra_favorites (
+    id VARCHAR(30) PRIMARY KEY,
+    username VARCHAR(50) NOT NULL,
+    file_path TEXT NOT NULL,
+    item_type VARCHAR(10) NOT NULL DEFAULT 'file' CHECK (item_type IN ('file', 'folder')),
+    display_name VARCHAR(255) DEFAULT '',
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    UNIQUE(username, file_path)
+);
+CREATE INDEX IF NOT EXISTS idx_favorites_user ON pyra_favorites(username);
+CREATE INDEX IF NOT EXISTS idx_favorites_path ON pyra_favorites(file_path);
+
 -- ============================================
 -- Disable RLS (app uses service_role key)
 -- ============================================
@@ -294,3 +307,4 @@ ALTER TABLE pyra_file_index DISABLE ROW LEVEL SECURITY;
 ALTER TABLE pyra_settings DISABLE ROW LEVEL SECURITY;
 ALTER TABLE pyra_sessions DISABLE ROW LEVEL SECURITY;
 ALTER TABLE pyra_login_attempts DISABLE ROW LEVEL SECURITY;
+ALTER TABLE pyra_favorites DISABLE ROW LEVEL SECURITY;

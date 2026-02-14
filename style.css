@@ -422,7 +422,7 @@ body::before {
 /* Column headers */
 .file-list-header {
     display: grid;
-    grid-template-columns: 36px 1fr 80px 140px 110px;
+    grid-template-columns: 36px 1fr 28px 80px 140px 110px;
     align-items: center;
     gap: 8px;
     padding: 8px 24px;
@@ -466,7 +466,7 @@ body::before {
 
 .file-item {
     display: grid;
-    grid-template-columns: 36px 1fr 80px 140px 110px;
+    grid-template-columns: 36px 1fr 28px 80px 140px 110px;
     align-items: center;
     gap: 8px;
     padding: 7px 24px;
@@ -1260,7 +1260,7 @@ body::before {
 
     .file-list-header,
     .file-item {
-        grid-template-columns: 36px 1fr auto;
+        grid-template-columns: 36px 1fr 24px auto;
     }
 
     .file-date, .file-list-header .col-date {
@@ -1277,7 +1277,7 @@ body::before {
 @media (max-width: 600px) {
     .file-list-header,
     .file-item {
-        grid-template-columns: 32px 1fr 80px;
+        grid-template-columns: 32px 1fr 24px;
     }
 
     .file-icon {
@@ -4229,5 +4229,322 @@ textarea::placeholder {
     .settings-row input[type="text"],
     .settings-row input[type="number"] {
         width: 100%;
+    }
+}
+
+/* ============================================
+   @Mentions Dropdown
+   ============================================ */
+.mention-dropdown {
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-light);
+    border-radius: var(--radius);
+    box-shadow: var(--shadow-lg);
+    z-index: 10000;
+    max-height: 240px;
+    overflow-y: auto;
+    padding: 4px;
+}
+
+.mention-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 12px;
+    cursor: pointer;
+    border-radius: 6px;
+    transition: background var(--transition);
+}
+
+.mention-item:hover,
+.mention-item.active {
+    background: var(--accent-bg);
+}
+
+.mention-avatar {
+    width: 28px;
+    height: 28px;
+    border-radius: 50%;
+    background: var(--accent-bg);
+    border: 1px solid var(--accent-border);
+    color: var(--accent);
+    font-size: 10px;
+    font-weight: 600;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+}
+
+.mention-info {
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+    overflow: hidden;
+}
+
+.mention-displayname {
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--text-primary);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.mention-username {
+    font-size: 11px;
+    color: var(--text-muted);
+}
+
+.mention-highlight {
+    color: var(--accent);
+    font-weight: 500;
+    background: var(--accent-bg);
+    padding: 1px 4px;
+    border-radius: 3px;
+    cursor: default;
+}
+
+/* ============================================
+   Star / Favorites
+   ============================================ */
+.file-star-col {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+}
+
+.star-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 24px;
+    height: 24px;
+    padding: 0;
+    border: none;
+    background: transparent;
+    cursor: pointer;
+    color: var(--text-muted);
+    opacity: 0.3;
+    transition: all 0.2s ease;
+    border-radius: 4px;
+}
+
+.star-btn svg {
+    width: 14px;
+    height: 14px;
+}
+
+.star-btn:hover {
+    opacity: 1;
+    color: #F59E0B;
+    transform: scale(1.15);
+}
+
+.star-btn.active {
+    opacity: 1;
+    color: #F59E0B;
+    filter: drop-shadow(0 0 4px rgba(245, 158, 11, 0.3));
+}
+
+.star-btn.active:hover {
+    color: #D97706;
+}
+
+.file-item:hover .star-btn {
+    opacity: 0.6;
+}
+
+.file-item:hover .star-btn.active {
+    opacity: 1;
+}
+
+/* Grid view star positioning */
+.file-grid.grid-view .file-star-col {
+    position: absolute;
+    top: 8px;
+    right: 8px;
+    width: auto;
+}
+
+.file-grid.grid-view .star-btn {
+    opacity: 0;
+}
+
+.file-grid.grid-view .file-item:hover .star-btn {
+    opacity: 0.6;
+}
+
+.file-grid.grid-view .star-btn.active {
+    opacity: 1;
+}
+
+.file-grid.grid-view .file-item {
+    position: relative;
+}
+
+/* ============================================
+   Dashboard: Favorites & Recent Files
+   ============================================ */
+.dash-favorites-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));
+    gap: 8px;
+    padding: 12px;
+}
+
+.dash-fav-item {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    text-align: center;
+    padding: 14px 8px 10px;
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius);
+    background: var(--bg-tertiary);
+    cursor: pointer;
+    transition: all var(--transition);
+    gap: 6px;
+}
+
+.dash-fav-item:hover {
+    border-color: var(--accent-border);
+    background: var(--bg-hover);
+    transform: translateY(-2px);
+    box-shadow: var(--shadow-md);
+}
+
+.dash-fav-icon {
+    width: 32px;
+    height: 32px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.dash-fav-icon svg {
+    width: 28px;
+    height: 28px;
+}
+
+.dash-fav-name {
+    font-size: 11.5px;
+    font-weight: 500;
+    color: var(--text-primary);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    max-width: 100%;
+}
+
+.dash-fav-path {
+    font-size: 10px;
+    color: var(--text-muted);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    max-width: 100%;
+}
+
+.dash-recent-strip {
+    display: flex;
+    gap: 10px;
+    padding: 12px;
+    overflow-x: auto;
+    scroll-behavior: smooth;
+    -webkit-overflow-scrolling: touch;
+}
+
+.dash-recent-strip::-webkit-scrollbar {
+    height: 4px;
+}
+
+.dash-recent-strip::-webkit-scrollbar-thumb {
+    background: var(--border-light);
+    border-radius: 4px;
+}
+
+.dash-recent-item {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    text-align: center;
+    min-width: 90px;
+    max-width: 100px;
+    padding: 10px 8px;
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius);
+    background: var(--bg-tertiary);
+    cursor: pointer;
+    transition: all var(--transition);
+    flex-shrink: 0;
+    gap: 4px;
+}
+
+.dash-recent-item:hover {
+    border-color: var(--accent-border);
+    background: var(--bg-hover);
+    transform: translateY(-2px);
+}
+
+.dash-recent-icon {
+    width: 28px;
+    height: 28px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.dash-recent-icon svg {
+    width: 24px;
+    height: 24px;
+}
+
+.dash-recent-name {
+    font-size: 10.5px;
+    font-weight: 500;
+    color: var(--text-primary);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    max-width: 100%;
+}
+
+.dash-recent-meta {
+    font-size: 10px;
+    color: var(--text-muted);
+}
+
+.dash-card-wide {
+    grid-column: 1 / -1;
+}
+
+.dash-empty {
+    padding: 20px;
+    text-align: center;
+    color: var(--text-muted);
+    font-size: 13px;
+}
+
+@media (max-width: 768px) {
+    .mention-dropdown {
+        left: 8px !important;
+        right: 8px !important;
+        width: auto !important;
+    }
+    .dash-favorites-grid {
+        grid-template-columns: repeat(auto-fill, minmax(100px, 1fr));
+    }
+}
+
+@media (max-width: 600px) {
+    .file-star-col {
+        width: 24px;
+    }
+    .star-btn svg {
+        width: 12px;
+        height: 12px;
     }
 }

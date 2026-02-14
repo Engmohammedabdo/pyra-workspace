@@ -554,6 +554,16 @@ switch ($action) {
                 }
                 unset($f);
             }
+            // Enrich with favorite state
+            $favPaths = getUserFavoritePaths($_SESSION['user']);
+            foreach ($result['files'] as &$f) {
+                $f['is_favorite'] = in_array($f['path'], $favPaths);
+            }
+            unset($f);
+            foreach ($result['folders'] as &$f) {
+                $f['is_favorite'] = in_array($f['path'], $favPaths);
+            }
+            unset($f);
         }
         echo json_encode($result);
         break;
@@ -626,6 +636,7 @@ switch ($action) {
         $result = moveToTrash($path, $fileSize, $mimeType);
         if ($result['success']) {
             logActivity('delete', $path, ['moved_to_trash' => true]);
+            cleanupDeletedFavorites($path);
         }
         echo json_encode($result);
         break;
@@ -648,6 +659,8 @@ switch ($action) {
         $result = renameFile($oldPath, $newPath);
         if ($result['success']) {
             logActivity('rename', $oldPath, ['new_path' => $newPath]);
+            // Update favorite paths
+            dbRequest('PATCH', '/pyra_favorites?file_path=eq.' . rawurlencode($oldPath), ['file_path' => $newPath]);
         }
         echo json_encode($result);
         break;
@@ -860,10 +873,27 @@ switch ($action) {
                 }
             }
 
+            // Parse @mentions and send dedicated notifications
+            $mentionedUsers = parseMentions($text);
+            $alreadyNotified = [];
+            if (!empty($mentionedUsers)) {
+                $mDisplayName = $_SESSION['display_name'] ?? $_SESSION['user'];
+                foreach ($mentionedUsers as $mu) {
+                    createNotification($mu, 'mention', $mDisplayName . ' mentioned you in a comment on ' . $fileName, $text, $path);
+                    $alreadyNotified[] = $mu;
+                }
+            }
+            // Track parent reply author to avoid duplicate
+            if ($parentId && isset($parentReview) && !empty($parentReview['data'])) {
+                $alreadyNotified[] = $parentReview['data'][0]['username'];
+            }
+
             $notifTitle = $type === 'approval' ? 'File approved: ' . $fileName : 'New comment on ' . $fileName;
             $usersWithAccess = findUsersWithPathAccess(dirname($path));
             foreach ($usersWithAccess as $recipient) {
-                createNotification($recipient, $type, $notifTitle, $text, $path);
+                if (!in_array($recipient, $alreadyNotified)) {
+                    createNotification($recipient, $type, $notifTitle, $text, $path);
+                }
             }
         }
         echo json_encode($result);
@@ -1204,6 +1234,10 @@ switch ($action) {
         echo json_encode(['success' => true, 'users' => getAllUsers()]);
         break;
 
+    case 'getUsersLite':
+        echo json_encode(['success' => true, 'users' => getAllUsersLite()]);
+        break;
+
     case 'addUser':
         if (!isAdmin()) {
             echo json_encode(['success' => false, 'error' => 'Admin only']);
@@ -1483,6 +1517,7 @@ switch ($action) {
         requireAuth();
         $role = $_SESSION['role'] ?? 'client';
         $dashData = ['role' => $role];
+        $dashData['favorites'] = getUserFavorites($_SESSION['user']);
 
         if ($role === 'admin') {
             // User count
@@ -1760,6 +1795,41 @@ switch ($action) {
         }
         logActivity('index_rebuilt', '', ['file_count' => $indexed]);
         echo json_encode(['success' => true, 'indexed' => $indexed]);
+        break;
+
+    // === Favorites ===
+
+    case 'getFavorites':
+        $favorites = getUserFavorites($_SESSION['user']);
+        echo json_encode(['success' => true, 'favorites' => $favorites]);
+        break;
+
+    case 'addFavorite':
+        $input = $jsonBody;
+        $filePath = sanitizePath($input['file_path'] ?? '');
+        $itemType = $input['item_type'] ?? 'file';
+        $displayName = $input['display_name'] ?? '';
+        if (!$filePath) {
+            echo json_encode(['success' => false, 'error' => 'File path required']);
+            break;
+        }
+        if (!in_array($itemType, ['file', 'folder'])) {
+            echo json_encode(['success' => false, 'error' => 'Invalid item type']);
+            break;
+        }
+        $result = addFavoriteItem($_SESSION['user'], $filePath, $itemType, $displayName);
+        echo json_encode($result);
+        break;
+
+    case 'removeFavorite':
+        $input = $jsonBody;
+        $filePath = sanitizePath($input['file_path'] ?? '');
+        if (!$filePath) {
+            echo json_encode(['success' => false, 'error' => 'File path required']);
+            break;
+        }
+        $result = removeFavoriteItem($_SESSION['user'], $filePath);
+        echo json_encode($result);
         break;
 
     default:

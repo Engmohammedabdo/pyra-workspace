@@ -82,6 +82,10 @@ const App = {
     _currentView: localStorage.getItem('pyra-view') || 'list',
     _currentScreen: 'dashboard',
     _dashboardData: null,
+    _mentionUsers: [],
+    _mentionDropdown: null,
+    _favoritePaths: new Set(),
+    _recentFiles: [],
 
     // ═══════════════════════════════════════════════════════════════
     // SVG ICONS
@@ -125,7 +129,9 @@ const App = {
         team: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2z"/><path d="M8 14s1.5 2 4 2 4-2 4-2"/><circle cx="9" cy="9" r="1.5"/><circle cx="15" cy="9" r="1.5"/></svg>',
         shield: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>',
         clock: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>',
-        plus: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>'
+        plus: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>',
+        star: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>',
+        starFilled: '<svg viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="1"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>'
     },
 
     // ═══════════════════════════════════════════════════════════════
@@ -139,6 +145,9 @@ const App = {
         this.user = window.PYRA_CONFIG.user;
         this.permissions = window.PYRA_CONFIG.user?.permissions || {};
         this.initNotifications();
+        this._loadMentionUsers();
+        this._loadFavorites();
+        this._loadRecentFiles();
         this.showDashboard();
     },
 
@@ -227,6 +236,10 @@ const App = {
         }
         html += '</div></div>';
 
+        // Favorites & Recent Files
+        html += this._renderFavoritesDashCard(data.favorites || []);
+        html += this._renderRecentFilesDashCard();
+
         return html;
     },
 
@@ -282,6 +295,10 @@ const App = {
             html += '<div class="dash-empty">No recent activity</div>';
         }
         html += '</div></div>';
+
+        // Favorites & Recent Files
+        html += this._renderFavoritesDashCard(data.favorites || []);
+        html += this._renderRecentFilesDashCard();
 
         return html;
     },
@@ -347,6 +364,10 @@ const App = {
             html += '<div class="dash-empty">No recent activity</div>';
         }
         html += '</div></div>';
+
+        // Favorites & Recent Files
+        html += this._renderFavoritesDashCard(data.favorites || []);
+        html += this._renderRecentFilesDashCard();
 
         return html;
     },
@@ -694,9 +715,13 @@ const App = {
         if (this.canDo('can_delete')) {
             deleteBtn = `<button class="file-action-btn delete" onclick="event.stopPropagation(); App.deleteFolder('${this.escAttr(f.path)}')" title="Delete">${this.icons.trash}</button>`;
         }
+        const isFav = this._favoritePaths.has(f.path);
+        const starIcon = isFav ? this.icons.starFilled : this.icons.star;
+        const starClass = isFav ? 'active' : '';
         return `<div class="file-item" onclick="App.navigateTo('${this.escAttr(f.path)}')" oncontextmenu="App.showContextMenu(event, 'folder', ${fJson})">
             <div class="file-icon folder">${this.icons.folder}</div>
             <div class="file-name">${this.escHtml(f.name)}</div>
+            <div class="file-star-col"><button class="star-btn ${starClass}" data-path="${this.escAttr(f.path)}" onclick="event.stopPropagation(); App.toggleFavorite('${this.escAttr(f.path)}', 'folder', '${this.escAttr(f.name)}')" title="${isFav ? 'Remove from Favorites' : 'Add to Favorites'}">${starIcon}</button></div>
             <div class="file-size"></div>
             <div class="file-date"></div>
             <div class="file-actions-col">
@@ -722,9 +747,14 @@ const App = {
             actionBtns += `<button class="file-action-btn delete" onclick="event.stopPropagation(); App.deleteFile('${this.escAttr(f.path)}')" title="Delete">${this.icons.trash}</button>`;
         }
 
+        const isFav = this._favoritePaths.has(f.path);
+        const starIcon = isFav ? this.icons.starFilled : this.icons.star;
+        const starClass = isFav ? 'active' : '';
+
         return `<div class="file-item ${selected}" onclick="App.previewFile(${fJson})" oncontextmenu="App.showContextMenu(event, 'file', ${fJson})">
             <div class="file-icon ${iconInfo.class}">${iconInfo.icon}</div>
             <div class="file-name">${this.wrapWithDir(this.escHtml(displayName))}</div>
+            <div class="file-star-col"><button class="star-btn ${starClass}" data-path="${this.escAttr(f.path)}" onclick="event.stopPropagation(); App.toggleFavorite('${this.escAttr(f.path)}', 'file', '${this.escAttr(displayName)}')" title="${isFav ? 'Remove from Favorites' : 'Add to Favorites'}">${starIcon}</button></div>
             <div class="file-size">${this.formatSize(f.size)}</div>
             <div class="file-date">${this.formatDate(f.updated_at)}</div>
             <div class="file-actions-col">
@@ -767,6 +797,7 @@ const App = {
     async previewFile(file) {
         const myId = ++this._previewId;
         this.selectedFile = file;
+        this._addToRecentFiles(file);
         this.editMode = false;
         this.renderFiles();
 
@@ -1249,6 +1280,8 @@ const App = {
 
         if (type === 'folder') {
             html = `<div class="context-menu-item" onclick="App.navigateTo('${this.escAttr(item.path)}')">${this.icons.folder} Open</div>`;
+            const _isFavF = this._favoritePaths.has(item.path);
+            html += `<div class="context-menu-item" onclick="App.toggleFavorite('${this.escAttr(item.path)}', 'folder', '${this.escAttr(item.name)}'); App.closeContextMenu()">${_isFavF ? this.icons.starFilled : this.icons.star} ${_isFavF ? 'Remove from Favorites' : 'Add to Favorites'}</div>`;
             if (this.canDo('can_edit') || this.canDo('can_delete')) {
                 html += `<div class="context-menu-sep"></div>`;
             }
@@ -1264,6 +1297,8 @@ const App = {
             }
         } else {
             html = `<div class="context-menu-item" onclick="App.previewFile(${fJson})">${this.icons.eye} Preview</div>`;
+            const _isFavFile = this._favoritePaths.has(item.path);
+            html += `<div class="context-menu-item" onclick="App.toggleFavorite('${this.escAttr(item.path)}', 'file', '${this.escAttr(item.display_name || item.name)}'); App.closeContextMenu()">${_isFavFile ? this.icons.starFilled : this.icons.star} ${_isFavFile ? 'Remove from Favorites' : 'Add to Favorites'}</div>`;
             if (this.canDo('can_download')) {
                 html += `<div class="context-menu-item" onclick="App.downloadFile('${this.escAttr(item.path)}')">${this.icons.download} Download</div>`;
             }
@@ -1404,6 +1439,9 @@ const App = {
         }
 
         container.innerHTML = html;
+        // Attach @mention listeners
+        const mainTa = container.querySelector('#reviewTextarea');
+        if (mainTa) this._attachMentionListener(mainTa);
     },
 
     _renderReviewNodes(nodes, path, depth) {
@@ -1433,7 +1471,7 @@ const App = {
             html += '</div>';
             html += '</div>';
             if (r.text) {
-                html += '<div class="review-text">' + this.escHtml(r.text) + '</div>';
+                html += '<div class="review-text">' + this._renderMentionText(r.text) + '</div>';
             }
             // Reply button
             if (depth < maxDepth && (this.canDo('can_review') || this.isAdmin())) {
@@ -1464,6 +1502,7 @@ const App = {
             if (form.style.display !== 'none') {
                 const ta = document.getElementById('replyText_' + reviewId);
                 if (ta) ta.focus();
+                if (ta) this._attachMentionListener(ta);
             }
         }
     },
@@ -4030,6 +4069,266 @@ const App = {
         } catch (e) {
             this.toast('Error: ' + e.message, 'error');
         }
+    },
+
+    // ═══════════════════════════════════════════════════════════════
+    // @MENTIONS
+    // ═══════════════════════════════════════════════════════════════
+
+    async _loadMentionUsers() {
+        if (this._mentionUsers.length > 0) return;
+        try {
+            const res = await this.apiFetch('api.php?action=getUsersLite');
+            const data = await res.json();
+            if (data.success) {
+                this._mentionUsers = data.users || [];
+            }
+        } catch (e) { /* silently fail */ }
+    },
+
+    _attachMentionListener(textarea) {
+        if (!textarea || textarea._mentionAttached) return;
+        textarea._mentionAttached = true;
+        textarea.addEventListener('input', () => this._handleMentionInput(textarea));
+        textarea.addEventListener('keydown', (e) => this._handleMentionKeydown(e, textarea));
+        textarea.addEventListener('blur', () => {
+            setTimeout(() => this._hideMentionDropdown(), 200);
+        });
+    },
+
+    _handleMentionInput(textarea) {
+        const val = textarea.value;
+        const pos = textarea.selectionStart;
+        let atIndex = -1;
+        for (let i = pos - 1; i >= 0; i--) {
+            const ch = val[i];
+            if (ch === '@') {
+                if (i === 0 || /\s/.test(val[i - 1])) atIndex = i;
+                break;
+            }
+            if (/\s/.test(ch)) break;
+        }
+        if (atIndex === -1) { this._hideMentionDropdown(); return; }
+        const query = val.substring(atIndex + 1, pos).toLowerCase();
+        const filtered = this._mentionUsers.filter(u =>
+            u.username.toLowerCase().includes(query) ||
+            (u.display_name || '').toLowerCase().includes(query)
+        ).slice(0, 8);
+        if (filtered.length === 0) { this._hideMentionDropdown(); return; }
+        this._showMentionDropdown(textarea, filtered, atIndex);
+    },
+
+    _showMentionDropdown(textarea, users, atIndex) {
+        this._hideMentionDropdown();
+        const dropdown = document.createElement('div');
+        dropdown.className = 'mention-dropdown';
+        dropdown.id = 'mentionDropdown';
+        users.forEach((u, i) => {
+            const item = document.createElement('div');
+            item.className = 'mention-item' + (i === 0 ? ' active' : '');
+            item.dataset.username = u.username;
+            const initials = (u.display_name || u.username).substring(0, 2).toUpperCase();
+            item.innerHTML = `<span class="mention-avatar">${initials}</span><span class="mention-info"><span class="mention-displayname">${this.escHtml(u.display_name || u.username)}</span><span class="mention-username">@${this.escHtml(u.username)}</span></span>`;
+            item.addEventListener('mousedown', (e) => {
+                e.preventDefault();
+                this._insertMention(textarea, u.username, atIndex);
+            });
+            dropdown.appendChild(item);
+        });
+        const rect = textarea.getBoundingClientRect();
+        dropdown.style.position = 'fixed';
+        dropdown.style.left = rect.left + 'px';
+        dropdown.style.bottom = (window.innerHeight - rect.top + 4) + 'px';
+        dropdown.style.width = Math.min(rect.width, 280) + 'px';
+        document.body.appendChild(dropdown);
+        this._mentionDropdown = dropdown;
+    },
+
+    _hideMentionDropdown() {
+        if (this._mentionDropdown) {
+            this._mentionDropdown.remove();
+            this._mentionDropdown = null;
+        }
+    },
+
+    _handleMentionKeydown(e, textarea) {
+        const dropdown = this._mentionDropdown;
+        if (!dropdown) return;
+        const items = dropdown.querySelectorAll('.mention-item');
+        const activeItem = dropdown.querySelector('.mention-item.active');
+        let activeIndex = Array.from(items).indexOf(activeItem);
+        if (e.key === 'ArrowDown') {
+            e.preventDefault();
+            if (activeIndex < items.length - 1) {
+                items[activeIndex]?.classList.remove('active');
+                items[activeIndex + 1]?.classList.add('active');
+            }
+        } else if (e.key === 'ArrowUp') {
+            e.preventDefault();
+            if (activeIndex > 0) {
+                items[activeIndex]?.classList.remove('active');
+                items[activeIndex - 1]?.classList.add('active');
+            }
+        } else if (e.key === 'Enter' || e.key === 'Tab') {
+            if (activeItem) {
+                e.preventDefault();
+                const val = textarea.value;
+                const pos = textarea.selectionStart;
+                let atIdx = -1;
+                for (let i = pos - 1; i >= 0; i--) {
+                    if (val[i] === '@') { atIdx = i; break; }
+                    if (/\s/.test(val[i])) break;
+                }
+                if (atIdx >= 0) this._insertMention(textarea, activeItem.dataset.username, atIdx);
+            }
+        } else if (e.key === 'Escape') {
+            this._hideMentionDropdown();
+        }
+    },
+
+    _insertMention(textarea, username, atIndex) {
+        const val = textarea.value;
+        const pos = textarea.selectionStart;
+        const before = val.substring(0, atIndex);
+        const after = val.substring(pos);
+        const insertion = '@' + username + ' ';
+        textarea.value = before + insertion + after;
+        textarea.selectionStart = textarea.selectionEnd = atIndex + insertion.length;
+        textarea.focus();
+        this._hideMentionDropdown();
+    },
+
+    _renderMentionText(text) {
+        let safe = this.escHtml(text);
+        safe = safe.replace(/@([a-zA-Z0-9_]+)/g, (match, username) => {
+            const user = this._mentionUsers.find(u => u.username === username);
+            const dn = user ? user.display_name : username;
+            return '<span class="mention-highlight" title="@' + this.escHtml(username) + '">@' + this.escHtml(dn) + '</span>';
+        });
+        return safe;
+    },
+
+    // ═══════════════════════════════════════════════════════════════
+    // FAVORITES & QUICK ACCESS
+    // ═══════════════════════════════════════════════════════════════
+
+    async _loadFavorites() {
+        try {
+            const res = await this.apiFetch('api.php?action=getFavorites');
+            const data = await res.json();
+            if (data.success) {
+                this._favoritePaths = new Set((data.favorites || []).map(f => f.file_path));
+            }
+        } catch (e) { /* silently fail */ }
+    },
+
+    async toggleFavorite(filePath, itemType, displayName, event) {
+        if (event) event.stopPropagation();
+        const isFav = this._favoritePaths.has(filePath);
+        const action = isFav ? 'removeFavorite' : 'addFavorite';
+        try {
+            const res = await this.apiFetch('api.php', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ action, file_path: filePath, item_type: itemType || 'file', display_name: displayName || '' })
+            });
+            const data = await res.json();
+            if (data.success) {
+                if (isFav) {
+                    this._favoritePaths.delete(filePath);
+                    this.toast('Removed from favorites', 'info');
+                } else {
+                    this._favoritePaths.add(filePath);
+                    this.toast('Added to favorites', 'success');
+                }
+                this._updateStarIcons(filePath);
+            } else {
+                this.toast(data.error || 'Failed', 'error');
+            }
+        } catch (e) {
+            this.toast('Error: ' + e.message, 'error');
+        }
+    },
+
+    _updateStarIcons(filePath) {
+        document.querySelectorAll('.star-btn').forEach(btn => {
+            if (btn.dataset.path === filePath) {
+                const isFav = this._favoritePaths.has(filePath);
+                btn.classList.toggle('active', isFav);
+                btn.innerHTML = isFav ? this.icons.starFilled : this.icons.star;
+                btn.title = isFav ? 'Remove from Favorites' : 'Add to Favorites';
+            }
+        });
+    },
+
+    _loadRecentFiles() {
+        try {
+            const raw = localStorage.getItem('pyra-recent-files');
+            this._recentFiles = raw ? JSON.parse(raw) : [];
+        } catch (e) {
+            this._recentFiles = [];
+        }
+    },
+
+    _addToRecentFiles(file) {
+        this._recentFiles = this._recentFiles.filter(f => f.path !== file.path);
+        this._recentFiles.unshift({
+            name: file.display_name || file.name,
+            path: file.path,
+            mimetype: file.mimetype || '',
+            size: file.size || 0,
+            updated_at: file.updated_at || new Date().toISOString()
+        });
+        this._recentFiles = this._recentFiles.slice(0, 20);
+        try { localStorage.setItem('pyra-recent-files', JSON.stringify(this._recentFiles)); } catch(e) {}
+    },
+
+    _renderFavoritesDashCard(favorites) {
+        let html = '<div class="dash-card">';
+        html += '<div class="dash-card-header">' + this.icons.starFilled + ' Favorites</div>';
+        if (!favorites || favorites.length === 0) {
+            html += '<div class="dash-empty">No favorites yet. Star files to see them here.</div>';
+        } else {
+            html += '<div class="dash-favorites-grid">';
+            favorites.slice(0, 12).forEach(fav => {
+                const iconInfo = fav.item_type === 'folder'
+                    ? { icon: this.icons.folder, class: 'folder' }
+                    : this.getFileIcon(fav.display_name || fav.file_path.split('/').pop(), '');
+                const name = fav.display_name || fav.file_path.split('/').pop();
+                const folder = fav.item_type === 'folder' ? fav.file_path : fav.file_path.substring(0, fav.file_path.lastIndexOf('/'));
+                html += `<div class="dash-fav-item" onclick="App.showDashboardFiles('${this.escAttr(folder)}')">`;
+                html += `<div class="dash-fav-icon ${iconInfo.class}">${iconInfo.icon}</div>`;
+                html += `<div class="dash-fav-name">${this.escHtml(name)}</div>`;
+                html += `<div class="dash-fav-path">${this.escHtml(fav.file_path)}</div>`;
+                html += '</div>';
+            });
+            html += '</div>';
+        }
+        html += '</div>';
+        return html;
+    },
+
+    _renderRecentFilesDashCard() {
+        const recent = this._recentFiles || [];
+        let html = '<div class="dash-card dash-card-wide">';
+        html += '<div class="dash-card-header">' + this.icons.clock + ' Recent Files</div>';
+        if (recent.length === 0) {
+            html += '<div class="dash-empty">No recently opened files.</div>';
+        } else {
+            html += '<div class="dash-recent-strip">';
+            recent.slice(0, 10).forEach(f => {
+                const iconInfo = this.getFileIcon(f.name, f.mimetype);
+                const folder = f.path.substring(0, f.path.lastIndexOf('/'));
+                html += `<div class="dash-recent-item" onclick="App.showDashboardFiles('${this.escAttr(folder)}')">`;
+                html += `<div class="dash-recent-icon ${iconInfo.class}">${iconInfo.icon}</div>`;
+                html += `<div class="dash-recent-name">${this.escHtml(f.name)}</div>`;
+                html += `<div class="dash-recent-meta">${this.formatSize(f.size)}</div>`;
+                html += '</div>';
+            });
+            html += '</div>';
+        }
+        html += '</div>';
+        return html;
     },
 
     // ═══════════════════════════════════════════════════════════════
