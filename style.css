@@ -3755,6 +3755,12 @@ textarea::placeholder {
     gap: 8px;
 }
 
+.dash-card-header svg {
+    width: 16px;
+    height: 16px;
+    flex-shrink: 0;
+}
+
 .dash-badge {
     font-size: 11px;
     font-weight: 500;
@@ -3853,10 +3859,11 @@ textarea::placeholder {
 }
 
 .dash-empty {
-    padding: 20px 16px;
+    padding: 24px 20px;
     text-align: center;
-    color: var(--muted);
+    color: var(--text-muted);
     font-size: 13px;
+    font-style: italic;
 }
 
 .dash-projects {
@@ -4500,6 +4507,7 @@ textarea::placeholder {
 .dash-recent-icon svg {
     width: 24px;
     height: 24px;
+    flex-shrink: 0;
 }
 
 .dash-recent-name {
@@ -4515,17 +4523,6 @@ textarea::placeholder {
 .dash-recent-meta {
     font-size: 10px;
     color: var(--text-muted);
-}
-
-.dash-card-wide {
-    grid-column: 1 / -1;
-}
-
-.dash-empty {
-    padding: 20px;
-    text-align: center;
-    color: var(--text-muted);
-    font-size: 13px;
 }
 
 @media (max-width: 768px) {
