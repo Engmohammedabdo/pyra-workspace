@@ -36,6 +36,10 @@ const App = {
     _modalAbort: null,
     user: window.PYRA_CONFIG?.user || null,
     permissions: window.PYRA_CONFIG?.user?.permissions || {},
+    _notifCount: 0,
+    _notifPollTimer: null,
+    _deepSearchAbort: null,
+    _currentView: localStorage.getItem('pyra-view') || 'list',
 
     icons: {
         folder: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>',
@@ -68,20 +72,30 @@ const App = {
         users: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>',
         check: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>',
         comment: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>',
-        key: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.78 7.78 5.5 5.5 0 0 1 7.78-7.78zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4"/></svg>'
+        key: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.78 7.78 5.5 5.5 0 0 1 7.78-7.78zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4"/></svg>',
+        bell: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>',
+        activity: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>',
+        share: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/></svg>',
+        restore: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/></svg>',
+        team: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2z"/><path d="M8 14s1.5 2 4 2 4-2 4-2"/><circle cx="9" cy="9" r="1.5"/><circle cx="15" cy="9" r="1.5"/></svg>',
+        shield: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>',
+        clock: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>',
+        plus: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>'
     },
 
     init() {
+        this.applyTheme();
+        this.applyView();
         this.bindEvents();
-        if (window.PYRA_CONFIG?.auth) {
-            this.user = window.PYRA_CONFIG.user;
-            this.permissions = window.PYRA_CONFIG.user?.permissions || {};
-            if (this.user && this.user.role !== 'admin' && this.user.permissions?.allowed_paths) {
-                const allowed = this.user.permissions.allowed_paths;
-                if (Array.isArray(allowed) && allowed.length > 0 && allowed[0] !== '*') {
-                    this.loadFiles(allowed[0]);
-                    return;
-                }
+        if (!window.PYRA_CONFIG?.auth) return;
+        this.user = window.PYRA_CONFIG.user;
+        this.permissions = window.PYRA_CONFIG.user?.permissions || {};
+        this.initNotifications();
+        if (this.user && this.user.role !== 'admin' && this.user.permissions?.allowed_paths) {
+            const allowed = this.user.permissions.allowed_paths;
+            if (Array.isArray(allowed) && allowed.length > 0 && allowed[0] !== '*') {
+                this.loadFiles(allowed[0]);
+                return;
             }
         }
         this.loadFiles('');
@@ -93,6 +107,58 @@ const App = {
             clearTimeout(timer);
             timer = setTimeout(() => fn.apply(this, args), ms);
         };
+    },
+
+    // === Theme Toggle ===
+    applyTheme() {
+        const saved = localStorage.getItem('pyra-theme');
+        const body = document.getElementById('bodyEl') || document.body;
+        if (saved === 'pyramedia') {
+            body.setAttribute('data-theme', 'pyramedia');
+            document.querySelector('.theme-toggle')?.classList.add('active');
+        } else {
+            body.removeAttribute('data-theme');
+            document.querySelector('.theme-toggle')?.classList.remove('active');
+        }
+    },
+
+    toggleTheme() {
+        const body = document.getElementById('bodyEl') || document.body;
+        const current = body.getAttribute('data-theme');
+        if (current === 'pyramedia') {
+            body.removeAttribute('data-theme');
+            localStorage.setItem('pyra-theme', 'default');
+            document.querySelector('.theme-toggle')?.classList.remove('active');
+        } else {
+            body.setAttribute('data-theme', 'pyramedia');
+            localStorage.setItem('pyra-theme', 'pyramedia');
+            document.querySelector('.theme-toggle')?.classList.add('active');
+        }
+    },
+
+    // === View Toggle ===
+    applyView() {
+        const view = this._currentView;
+        const grid = document.getElementById('fileGrid');
+        const header = document.querySelector('.file-list-header');
+        if (!grid) return;
+        if (view === 'grid') {
+            grid.classList.add('grid-view');
+            if (header) header.style.display = 'none';
+        } else {
+            grid.classList.remove('grid-view');
+            if (header) header.style.display = '';
+        }
+        // Update toggle button states
+        document.querySelectorAll('.view-toggle-btn').forEach(btn => {
+            btn.classList.toggle('active', btn.dataset.view === view);
+        });
+    },
+
+    setView(view) {
+        this._currentView = view;
+        localStorage.setItem('pyra-view', view);
+        this.applyView();
     },
 
     // === Auth Helpers ===
@@ -123,10 +189,12 @@ const App = {
         errorEl.textContent = '';
         btn.disabled = true;
 
+        const remember = document.getElementById('rememberMe')?.checked || false;
+
         this.apiFetch('api.php', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ action: 'login', username, password })
+            body: JSON.stringify({ action: 'login', username, password, remember })
         }).then(res => res.json()).then(data => {
             if (data.success) {
                 location.reload();
@@ -179,6 +247,7 @@ const App = {
             if (e.key === 'Delete' && this.selectedFile && !this.editMode) this.deleteFile(this.selectedFile.path);
             if (e.ctrlKey && e.key === 's' && this.editMode) { e.preventDefault(); this.saveFile(); }
             if (e.altKey && e.key === 'ArrowLeft') { e.preventDefault(); this.goBack(); }
+            if (e.ctrlKey && e.shiftKey && e.key === 'F') { e.preventDefault(); this.showDeepSearchModal(); }
         });
     },
 
@@ -236,8 +305,8 @@ const App = {
         parts.forEach((part, i) => {
             path += (path ? '/' : '') + part;
             const p = path;
-            html += `<span class="breadcrumb-sep">\u203A</span>`;
-            html += `<span class="breadcrumb-item ${i === parts.length - 1 ? 'active' : ''}" onclick="App.loadFiles('${this.escAttr(p)}')">${this.escHtml(part)}</span>`;
+            html += `<span class="breadcrumb-sep">›</span>`;
+            html += `<span class="breadcrumb-item ${i === parts.length - 1 ? 'active' : ''}" onclick="App.loadFiles('${this.escAttr(p)}')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg> ${this.escHtml(part)}</span>`;
         });
 
         el.innerHTML = html;
@@ -324,7 +393,13 @@ const App = {
             </div>`;
         } else {
             el.innerHTML = items.join('');
+            // Staggered entrance animation
+            el.querySelectorAll('.file-item').forEach((item, i) => {
+                item.style.animationDelay = `${i * 0.03}s`;
+                item.classList.add('animate-in');
+            });
         }
+        this.applyView();
     },
 
     renderFolderItem(f) {
@@ -431,6 +506,9 @@ const App = {
             actionsHtml += `<button class="btn btn-sm btn-ghost" onclick="App.downloadFile('${this.escAttr(file.path)}')" title="Download">${this.icons.download} Download</button>`;
         }
         actionsHtml += `<button class="btn btn-sm btn-ghost" onclick="App.copyPublicUrl('${this.escAttr(file.path)}')" title="Copy Link">${this.icons.link}</button>`;
+        if (this.canDo('can_download') || this.isAdmin()) {
+            actionsHtml += `<button class="btn btn-sm btn-ghost" onclick="App.showShareModal('${this.escAttr(file.path)}', '${this.escAttr(file.name)}')" title="Share">${this.icons.share}</button>`;
+        }
         if (this.canDo('can_edit') && this.isEditable(ext, mt)) {
             actionsHtml += `<button class="btn btn-sm btn-ghost" onclick="App.editFile(${this.escAttr(JSON.stringify(file))})" title="Edit">${this.icons.edit}</button>`;
         }
@@ -681,15 +759,21 @@ const App = {
     },
 
     async deleteFile(path) {
-        if (!confirm(`Delete "${path.split('/').pop()}"?`)) return;
+        const filename = path.split('/').pop();
+        if (!confirm(`Move "${filename}" to trash?`)) return;
         try {
+            const file = this.files.find(f => f.path === path);
             const formData = new FormData();
             formData.append('action', 'delete');
             formData.append('path', path);
+            if (file) {
+                formData.append('fileSize', file.size || 0);
+                formData.append('mimeType', file.mimetype || '');
+            }
             const res = await this.apiFetch('api.php', { method: 'POST', body: formData });
             const data = await res.json();
             if (data.success) {
-                this.toast('File deleted', 'success');
+                this.toast('Moved to trash', 'success');
                 if (this.selectedFile && this.selectedFile.path === path) this.closePreview();
                 this.loadFiles();
             } else {
@@ -699,7 +783,8 @@ const App = {
     },
 
     async deleteFolder(path) {
-        if (!confirm(`Delete folder "${path.split('/').pop()}" and all its contents?`)) return;
+        const name = path.split('/').pop();
+        if (!confirm(`Move folder "${name}" to trash?`)) return;
         this.showLoading(true);
         try {
             const allPaths = await this.collectFolderFiles(path);
@@ -712,15 +797,15 @@ const App = {
                 if (data.success) {
                     const failed = (data.results || []).filter(r => !r.success).length;
                     if (failed > 0) {
-                        this.toast(`Deleted with ${failed} error(s)`, 'error');
+                        this.toast(`Moved to trash with ${failed} error(s)`, 'error');
                     } else {
-                        this.toast('Folder deleted', 'success');
+                        this.toast('Moved to trash', 'success');
                     }
                 } else {
                     this.toast('Delete failed: ' + (data.error || ''), 'error');
                 }
             } else {
-                this.toast('Folder deleted', 'success');
+                this.toast('Moved to trash', 'success');
             }
             this.loadFiles();
         } catch (e) {
@@ -876,12 +961,19 @@ const App = {
             if (this.canDo('can_delete')) {
                 html += `<div class="context-menu-item danger" onclick="App.deleteFolder('${this.escAttr(item.path)}')">${this.icons.trash} Delete</div>`;
             }
+            if (this.isAdmin()) {
+                html += `<div class="context-menu-sep"></div>`;
+                html += `<div class="context-menu-item" onclick="App.showFilePermPanel('${this.escAttr(item.path)}')">${this.icons.shield} Permissions</div>`;
+            }
         } else {
             html = `<div class="context-menu-item" onclick="App.previewFile(${fJson})">${this.icons.eye} Preview</div>`;
             if (this.canDo('can_download')) {
                 html += `<div class="context-menu-item" onclick="App.downloadFile('${this.escAttr(item.path)}')">${this.icons.download} Download</div>`;
             }
             html += `<div class="context-menu-item" onclick="App.copyPublicUrl('${this.escAttr(item.path)}')">${this.icons.link} Copy Link</div>`;
+            if (this.canDo('can_download') || this.isAdmin()) {
+                html += `<div class="context-menu-item" onclick="App.showShareModal('${this.escAttr(item.path)}', '${this.escAttr(item.name)}')">${this.icons.share} Share Link</div>`;
+            }
             const ext = item.name.split('.').pop().toLowerCase();
             if (this.canDo('can_edit') && this.isEditable(ext, item.mimetype)) {
                 html += `<div class="context-menu-item" onclick="App.previewFile(${fJson}); setTimeout(() => App.editFile(${fJson}), 300)">${this.icons.edit} Edit</div>`;
@@ -894,6 +986,10 @@ const App = {
             }
             if (this.canDo('can_delete')) {
                 html += `<div class="context-menu-item danger" onclick="App.deleteFile('${this.escAttr(item.path)}')">${this.icons.trash} Delete</div>`;
+            }
+            if (this.isAdmin()) {
+                html += `<div class="context-menu-sep"></div>`;
+                html += `<div class="context-menu-item" onclick="App.showFilePermPanel('${this.escAttr(item.path)}')">${this.icons.shield} Permissions</div>`;
             }
         }
 
@@ -966,59 +1062,53 @@ const App = {
     },
 
     renderReviews(container, reviews, path) {
-        let html = `<div style="border-top:1px solid var(--border-color, #e2e8f0);margin-top:16px;padding-top:16px;">`;
-        html += `<h4 style="margin:0 0 12px 0;font-size:14px;font-weight:600;display:flex;align-items:center;gap:6px;">${this.icons.comment} Reviews (${reviews.length})</h4>`;
+        let html = `<div class="reviews-header">
+            <h3><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg> Reviews <span class="reviews-count">${reviews.length}</span></h3>
+        </div>`;
 
         if (reviews.length > 0) {
-            html += `<div style="display:flex;flex-direction:column;gap:8px;margin-bottom:16px;">`;
             reviews.forEach(r => {
                 const isResolved = !!r.resolved;
                 const isApproval = r.type === 'approval';
-                const resolvedStyle = isResolved ? 'opacity:0.5;text-decoration:line-through;' : '';
+                const typeClass = isApproval ? 'approval' : 'comment';
                 const dateStr = r.created_at ? this.formatDate(r.created_at) : '';
 
-                html += `<div style="padding:10px 12px;border-radius:8px;background:var(--bg-secondary, #f8fafc);border:1px solid var(--border-color, #e2e8f0);${resolvedStyle}">`;
-                html += `<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px;">`;
-                html += `<div style="display:flex;align-items:center;gap:6px;">`;
-                html += `<strong style="font-size:13px;">${this.escHtml(r.display_name || r.username || 'Unknown')}</strong>`;
-                if (isApproval) {
-                    html += `<span style="display:inline-flex;align-items:center;gap:3px;background:#22c55e;color:#fff;font-size:11px;padding:1px 7px;border-radius:10px;font-weight:600;">${this.icons.check} Approved</span>`;
-                }
-                if (isResolved) {
-                    html += `<span style="font-size:11px;color:var(--text-muted, #94a3b8);">resolved</span>`;
-                }
-                html += `<span style="font-size:11px;color:var(--text-muted, #94a3b8);">${this.escHtml(dateStr)}</span>`;
+                html += `<div class="review-item ${typeClass}${isResolved ? ' resolved' : ''}">`;
+                html += `<div class="review-meta">`;
+                html += `<div class="review-meta-left">`;
+                html += `<span class="review-author">${this.escHtml(r.display_name || r.username || 'Unknown')}</span>`;
+                html += `<span class="review-type-badge ${typeClass}">${isApproval ? 'Approved' : 'Comment'}</span>`;
+                if (isResolved) html += `<span class="review-resolved-badge">resolved</span>`;
                 html += `</div>`;
-
-                // Admin actions
+                html += `<div class="review-meta-right">`;
+                html += `<span class="review-date">${this.escHtml(dateStr)}</span>`;
                 if (this.isAdmin()) {
-                    html += `<div style="display:flex;gap:4px;">`;
-                    html += `<button class="btn btn-sm btn-ghost" style="font-size:11px;padding:2px 6px;" onclick="App.toggleResolve('${this.escAttr(String(r.id))}', '${this.escAttr(path)}')">${isResolved ? 'Unresolve' : 'Resolve'}</button>`;
-                    html += `<button class="btn btn-sm btn-ghost" style="font-size:11px;padding:2px 6px;color:#ef4444;" onclick="App.deleteReviewItem('${this.escAttr(String(r.id))}', '${this.escAttr(path)}')">${this.icons.trash}</button>`;
+                    html += `<div class="review-actions">`;
+                    html += `<button class="btn btn-sm btn-ghost" onclick="App.toggleResolve('${this.escAttr(String(r.id))}', '${this.escAttr(path)}')">${isResolved ? 'Unresolve' : 'Resolve'}</button>`;
+                    html += `<button class="btn btn-sm btn-ghost btn-danger" onclick="App.deleteReviewItem('${this.escAttr(String(r.id))}', '${this.escAttr(path)}')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="12" height="12"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg></button>`;
                     html += `</div>`;
                 }
-
+                html += `</div>`;
                 html += `</div>`;
                 if (r.text) {
-                    html += `<div style="font-size:13px;color:var(--text-primary, #334155);white-space:pre-wrap;">${this.escHtml(r.text)}</div>`;
+                    html += `<div class="review-text">${this.escHtml(r.text)}</div>`;
                 }
                 html += `</div>`;
             });
-            html += `</div>`;
+        } else {
+            html += `<div class="review-empty"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" width="32" height="32" style="opacity:0.3;margin-bottom:8px;display:block;margin-left:auto;margin-right:auto;"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>No reviews yet</div>`;
         }
 
-        // Add review form
         if (this.canDo('can_review') || this.isAdmin()) {
-            html += `<div style="margin-top:8px;">`;
-            html += `<textarea id="reviewTextarea" placeholder="Write a comment..." style="width:100%;min-height:60px;padding:8px 10px;border:1px solid var(--border-color, #e2e8f0);border-radius:8px;font-size:13px;font-family:inherit;resize:vertical;background:var(--bg-primary, #fff);color:var(--text-primary, #334155);box-sizing:border-box;"></textarea>`;
-            html += `<div style="display:flex;gap:8px;margin-top:8px;">`;
-            html += `<button class="btn btn-sm btn-primary" onclick="App.submitComment('${this.escAttr(path)}')">${this.icons.comment} Send Comment</button>`;
-            html += `<button class="btn btn-sm" style="background:#22c55e;color:#fff;border:none;" onclick="App.approveFile('${this.escAttr(path)}')">${this.icons.check} Approve File</button>`;
+            html += `<div class="review-input-area">`;
+            html += `<textarea id="reviewTextarea" class="review-textarea" placeholder="Write a comment..."></textarea>`;
+            html += `<div class="review-submit-actions">`;
+            html += `<button class="btn btn-sm btn-primary" onclick="App.submitComment('${this.escAttr(path)}')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg> Send Comment</button>`;
+            html += `<button class="btn btn-sm btn-approve" onclick="App.approveFile('${this.escAttr(path)}')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><polyline points="20 6 9 17 4 12"/></svg> Approve File</button>`;
             html += `</div>`;
             html += `</div>`;
         }
 
-        html += `</div>`;
         container.innerHTML = html;
     },
 
@@ -1106,145 +1196,278 @@ const App = {
     },
 
     // === User Management ===
-    async showUsersPanel() {
-        if (!this.isAdmin()) {
-            this.toast('Admin access required', 'error');
-            return;
-        }
-        try {
-            const res = await this.apiFetch('api.php?action=getUsers');
-            const data = await res.json();
-            if (!data.success) {
-                this.toast('Failed to load users: ' + (data.error || ''), 'error');
-                return;
-            }
-            const users = data.users || [];
-            this._renderUsersPanel(users);
-        } catch (e) {
-            this.toast('Error: ' + e.message, 'error');
+    // === User Management ===
+    _ufFolders: [],
+    _ufSelectedPaths: ['*'],
+
+    // Role presets - default permissions per role
+    _rolePresets: {
+        admin: {
+            can_upload: true, can_edit: true, can_delete: true,
+            can_download: true, can_create_folder: true, can_review: true,
+            allowed_paths: ['*']
+        },
+        employee: {
+            can_upload: true, can_edit: true, can_delete: false,
+            can_download: true, can_create_folder: true, can_review: true,
+            allowed_paths: ['*']
+        },
+        client: {
+            can_upload: false, can_edit: false, can_delete: false,
+            can_download: true, can_create_folder: false, can_review: true,
+            allowed_paths: []
         }
     },
 
+    async showUsersPanel() {
+        if (!this.isAdmin()) { this.toast('Admin access required', 'error'); return; }
+        try {
+            const res = await this.apiFetch('api.php?action=getUsers');
+            const data = await res.json();
+            if (!data.success) { this.toast('Failed to load users: ' + (data.error || ''), 'error'); return; }
+            this._renderUsersPanel(data.users || []);
+        } catch (e) { this.toast('Error: ' + e.message, 'error'); }
+    },
+
     _renderUsersPanel(users) {
-        // Remove existing panel
         const existing = document.getElementById('usersPanelOverlay');
         if (existing) existing.remove();
 
         const overlay = document.createElement('div');
         overlay.id = 'usersPanelOverlay';
-        overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:1000;display:flex;align-items:center;justify-content:center;padding:20px;';
+        overlay.className = 'um-overlay';
+
+        const permLabels = { can_upload: 'Upload', can_edit: 'Edit', can_delete: 'Delete', can_download: 'Download', can_create_folder: 'Folder', can_review: 'Review' };
 
         let tableRows = '';
         users.forEach(u => {
             const perms = u.permissions || {};
-            const allowedPaths = Array.isArray(perms.allowed_paths) ? perms.allowed_paths.join(', ') : (perms.allowed_paths || '*');
+            const paths = Array.isArray(perms.allowed_paths) ? perms.allowed_paths : ['*'];
+            const pathDisplay = paths.includes('*') ? 'All folders' : paths.join(', ');
             const uJson = this.escAttr(JSON.stringify(u));
+
+            let permTags = '';
+            for (const [key, label] of Object.entries(permLabels)) {
+                permTags += `<span class="user-perm-tag ${perms[key] ? 'active' : ''}">${label}</span>`;
+            }
+
             tableRows += `<tr>
-                <td style="padding:8px 12px;border-bottom:1px solid var(--border-color, #e2e8f0);">${this.escHtml(u.username)}</td>
-                <td style="padding:8px 12px;border-bottom:1px solid var(--border-color, #e2e8f0);">${this.escHtml(u.display_name || '')}</td>
-                <td style="padding:8px 12px;border-bottom:1px solid var(--border-color, #e2e8f0);"><span class="user-badge ${this.escAttr(u.role)}" style="font-size:11px;padding:2px 8px;border-radius:10px;">${this.escHtml(u.role)}</span></td>
-                <td style="padding:8px 12px;border-bottom:1px solid var(--border-color, #e2e8f0);font-size:12px;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${this.escAttr(allowedPaths)}">${this.escHtml(allowedPaths)}</td>
-                <td style="padding:8px 12px;border-bottom:1px solid var(--border-color, #e2e8f0);">
-                    <div style="display:flex;gap:4px;">
-                        <button class="btn btn-sm btn-ghost" onclick="App.showEditUserModal(${uJson})" title="Edit">${this.icons.edit}</button>
-                        <button class="btn btn-sm btn-ghost" onclick="App.showChangePasswordModal('${this.escAttr(u.username)}')" title="Change Password">${this.icons.key}</button>
-                        <button class="btn btn-sm btn-ghost" style="color:#ef4444;" onclick="App.deleteUserItem('${this.escAttr(u.username)}')" title="Delete">${this.icons.trash}</button>
-                    </div>
-                </td>
+                <td>${this.escHtml(u.username)}</td>
+                <td>${this.escHtml(u.display_name || '')}</td>
+                <td><span class="user-role-badge ${this.escAttr(u.role)}">${this.escHtml(u.role)}</span></td>
+                <td style="max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${this.escAttr(pathDisplay)}">${this.escHtml(pathDisplay)}</td>
+                <td><div class="user-perms-tags">${permTags}</div></td>
+                <td><div class="user-actions">
+                    <button class="btn btn-sm btn-ghost" onclick="App.showEditUserModal(${uJson})" title="Edit">${this.icons.edit}</button>
+                    <button class="btn btn-sm btn-ghost" onclick="App.showChangePasswordModal('${this.escAttr(u.username)}')" title="Change Password">${this.icons.key}</button>
+                    <button class="btn btn-sm btn-ghost" style="color:var(--danger);" onclick="App.deleteUserItem('${this.escAttr(u.username)}')" title="Delete">${this.icons.trash}</button>
+                </div></td>
             </tr>`;
         });
 
         overlay.innerHTML = `
-            <div style="background:var(--bg-primary, #fff);border-radius:12px;max-width:900px;width:100%;max-height:90vh;display:flex;flex-direction:column;box-shadow:0 25px 50px -12px rgba(0,0,0,0.25);">
-                <div style="display:flex;align-items:center;justify-content:space-between;padding:16px 20px;border-bottom:1px solid var(--border-color, #e2e8f0);">
-                    <h3 style="margin:0;font-size:16px;font-weight:600;display:flex;align-items:center;gap:8px;">${this.icons.users} User Management</h3>
+            <div class="users-panel">
+                <div class="users-panel-header">
+                    <h2>${this.icons.users} User Management</h2>
                     <div style="display:flex;gap:8px;">
                         <button class="btn btn-sm btn-primary" onclick="App.showAddUserModal()">+ Add User</button>
                         <button class="btn btn-sm btn-ghost" onclick="document.getElementById('usersPanelOverlay').remove()">${this.icons.close}</button>
                     </div>
                 </div>
-                <div style="overflow:auto;padding:0;">
-                    <table style="width:100%;border-collapse:collapse;">
-                        <thead>
-                            <tr style="background:var(--bg-secondary, #f8fafc);">
-                                <th style="padding:10px 12px;text-align:left;font-size:12px;font-weight:600;text-transform:uppercase;color:var(--text-muted, #94a3b8);">Username</th>
-                                <th style="padding:10px 12px;text-align:left;font-size:12px;font-weight:600;text-transform:uppercase;color:var(--text-muted, #94a3b8);">Display Name</th>
-                                <th style="padding:10px 12px;text-align:left;font-size:12px;font-weight:600;text-transform:uppercase;color:var(--text-muted, #94a3b8);">Role</th>
-                                <th style="padding:10px 12px;text-align:left;font-size:12px;font-weight:600;text-transform:uppercase;color:var(--text-muted, #94a3b8);">Allowed Paths</th>
-                                <th style="padding:10px 12px;text-align:left;font-size:12px;font-weight:600;text-transform:uppercase;color:var(--text-muted, #94a3b8);">Actions</th>
-                            </tr>
-                        </thead>
+                <div class="users-panel-body">
+                    <table class="users-table">
+                        <thead><tr>
+                            <th>Username</th><th>Display Name</th><th>Role</th><th>Paths</th><th>Permissions</th><th style="text-align:right">Actions</th>
+                        </tr></thead>
                         <tbody>${tableRows}</tbody>
                     </table>
-                    ${users.length === 0 ? '<div style="padding:40px;text-align:center;color:var(--text-muted, #94a3b8);">No users found</div>' : ''}
+                    ${users.length === 0 ? '<div style="padding:40px;text-align:center;color:var(--text-muted);">No users found</div>' : ''}
                 </div>
-            </div>
-        `;
-
-        document.body.appendChild(overlay);
-
-        // Close on overlay click
-        overlay.addEventListener('click', (e) => {
-            if (e.target === overlay) overlay.remove();
-        });
-    },
-
-    showAddUserModal() {
-        const existing = document.getElementById('userFormOverlay');
-        if (existing) existing.remove();
-
-        const overlay = document.createElement('div');
-        overlay.id = 'userFormOverlay';
-        overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:1100;display:flex;align-items:center;justify-content:center;padding:20px;';
-
-        overlay.innerHTML = `
-            <div style="background:var(--bg-primary, #fff);border-radius:12px;max-width:500px;width:100%;max-height:90vh;overflow:auto;box-shadow:0 25px 50px -12px rgba(0,0,0,0.25);">
-                <div style="display:flex;align-items:center;justify-content:space-between;padding:16px 20px;border-bottom:1px solid var(--border-color, #e2e8f0);">
-                    <h3 style="margin:0;font-size:16px;font-weight:600;">Add User</h3>
-                    <button class="btn btn-sm btn-ghost" onclick="document.getElementById('userFormOverlay').remove()">${this.icons.close}</button>
-                </div>
-                <div style="padding:20px;display:flex;flex-direction:column;gap:12px;">
-                    <div>
-                        <label style="display:block;font-size:12px;font-weight:600;margin-bottom:4px;">Username</label>
-                        <input type="text" id="uf_username" style="width:100%;padding:8px 10px;border:1px solid var(--border-color, #e2e8f0);border-radius:6px;font-size:13px;box-sizing:border-box;" />
-                    </div>
-                    <div>
-                        <label style="display:block;font-size:12px;font-weight:600;margin-bottom:4px;">Display Name</label>
-                        <input type="text" id="uf_displayname" style="width:100%;padding:8px 10px;border:1px solid var(--border-color, #e2e8f0);border-radius:6px;font-size:13px;box-sizing:border-box;" />
-                    </div>
-                    <div>
-                        <label style="display:block;font-size:12px;font-weight:600;margin-bottom:4px;">Password</label>
-                        <input type="password" id="uf_password" style="width:100%;padding:8px 10px;border:1px solid var(--border-color, #e2e8f0);border-radius:6px;font-size:13px;box-sizing:border-box;" />
-                    </div>
-                    <div>
-                        <label style="display:block;font-size:12px;font-weight:600;margin-bottom:4px;">Role</label>
-                        <select id="uf_role" style="width:100%;padding:8px 10px;border:1px solid var(--border-color, #e2e8f0);border-radius:6px;font-size:13px;box-sizing:border-box;">
-                            <option value="client">Client</option>
-                            <option value="admin">Admin</option>
-                        </select>
-                    </div>
-                    <div>
-                        <label style="display:block;font-size:12px;font-weight:600;margin-bottom:4px;">Allowed Paths (comma-separated, or * for all)</label>
-                        <textarea id="uf_paths" style="width:100%;padding:8px 10px;border:1px solid var(--border-color, #e2e8f0);border-radius:6px;font-size:13px;min-height:40px;box-sizing:border-box;">*</textarea>
-                    </div>
-                    <div style="display:flex;flex-wrap:wrap;gap:12px;">
-                        <label style="display:flex;align-items:center;gap:4px;font-size:13px;"><input type="checkbox" id="uf_can_upload" checked /> Upload</label>
-                        <label style="display:flex;align-items:center;gap:4px;font-size:13px;"><input type="checkbox" id="uf_can_edit" checked /> Edit</label>
-                        <label style="display:flex;align-items:center;gap:4px;font-size:13px;"><input type="checkbox" id="uf_can_delete" checked /> Delete</label>
-                        <label style="display:flex;align-items:center;gap:4px;font-size:13px;"><input type="checkbox" id="uf_can_download" checked /> Download</label>
-                        <label style="display:flex;align-items:center;gap:4px;font-size:13px;"><input type="checkbox" id="uf_can_create_folder" checked /> Create Folder</label>
-                        <label style="display:flex;align-items:center;gap:4px;font-size:13px;"><input type="checkbox" id="uf_can_review" checked /> Review</label>
-                    </div>
-                    <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:8px;">
-                        <button class="btn btn-sm" onclick="document.getElementById('userFormOverlay').remove()">Cancel</button>
-                        <button class="btn btn-sm btn-primary" onclick="App._submitAddUser()">Add User</button>
-                    </div>
-                </div>
-            </div>
-        `;
+            </div>`;
 
         document.body.appendChild(overlay);
         overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
+    },
+
+    async _loadRootFolders() {
+        try {
+            const res = await this.apiFetch('api.php?action=list&prefix=');
+            const data = await res.json();
+            if (data.success) {
+                this._ufFolders = data.folders || [];
+            }
+        } catch (e) { this._ufFolders = []; }
+    },
+
+    _checkSvg() {
+        return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg>';
+    },
+
+    _renderFolderPicker(containerId) {
+        const container = document.getElementById(containerId);
+        if (!container) return;
+
+        const isAll = this._ufSelectedPaths.includes('*');
+
+        let html = `<div class="folder-picker-item all-access ${isAll ? 'selected' : ''}" data-path="*">
+            <span class="fp-check">${this._checkSvg()}</span>
+            <span class="fp-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="8 12 12 8 16 12"/><line x1="12" y1="16" x2="12" y2="8"/></svg></span>
+            <span>All Folders (Full Access)</span>
+        </div>`;
+
+        if (this._ufFolders.length === 0) {
+            html += '<div class="folder-picker-empty">No folders found. Create folders first.</div>';
+        } else {
+            this._ufFolders.forEach(f => {
+                const selected = !isAll && this._ufSelectedPaths.includes(f.path);
+                html += `<div class="folder-picker-item ${selected ? 'selected' : ''} ${isAll ? 'disabled' : ''}" data-path="${this.escAttr(f.path)}" ${isAll ? 'style="opacity:0.4;pointer-events:none;"' : ''}>
+                    <span class="fp-check">${this._checkSvg()}</span>
+                    <span class="fp-icon">${this.icons.folder}</span>
+                    <span>${this.escHtml(f.name)}</span>
+                </div>`;
+            });
+        }
+
+        container.innerHTML = html;
+
+        container.querySelectorAll('.folder-picker-item').forEach(item => {
+            item.addEventListener('click', () => {
+                const path = item.dataset.path;
+                if (path === '*') {
+                    this._ufSelectedPaths = ['*'];
+                } else {
+                    this._ufSelectedPaths = this._ufSelectedPaths.filter(p => p !== '*');
+                    if (this._ufSelectedPaths.includes(path)) {
+                        this._ufSelectedPaths = this._ufSelectedPaths.filter(p => p !== path);
+                    } else {
+                        this._ufSelectedPaths.push(path);
+                    }
+                    if (this._ufSelectedPaths.length === 0) this._ufSelectedPaths = ['*'];
+                }
+                this._renderFolderPicker(containerId);
+            });
+        });
+    },
+
+    _renderPermCheckboxes(containerId, perms) {
+        const container = document.getElementById(containerId);
+        if (!container) return;
+
+        const permDefs = [
+            { key: 'can_upload', label: 'Upload', icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>' },
+            { key: 'can_edit', label: 'Edit', icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>' },
+            { key: 'can_delete', label: 'Delete', icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>' },
+            { key: 'can_download', label: 'Download', icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>' },
+            { key: 'can_create_folder', label: 'Create Folder', icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/><line x1="12" y1="11" x2="12" y2="17"/><line x1="9" y1="14" x2="15" y2="14"/></svg>' },
+            { key: 'can_review', label: 'Review', icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>' },
+        ];
+
+        let html = '';
+        permDefs.forEach(p => {
+            const checked = !!perms[p.key];
+            html += `<label class="perm-checkbox ${checked ? 'checked' : ''}" data-key="${p.key}">
+                <input type="checkbox" ${checked ? 'checked' : ''}>
+                <span class="perm-icon">${this._checkSvg()}</span>
+                <span>${p.label}</span>
+            </label>`;
+        });
+        container.innerHTML = html;
+
+        container.querySelectorAll('.perm-checkbox').forEach(label => {
+            label.addEventListener('click', (e) => {
+                e.preventDefault();
+                const cb = label.querySelector('input[type="checkbox"]');
+                cb.checked = !cb.checked;
+                label.classList.toggle('checked', cb.checked);
+            });
+        });
+    },
+
+    _getFormPermissions() {
+        const perms = {};
+        document.querySelectorAll('#uf_perms_container .perm-checkbox').forEach(label => {
+            perms[label.dataset.key] = label.querySelector('input').checked;
+        });
+        perms.allowed_paths = [...this._ufSelectedPaths];
+        return perms;
+    },
+
+    _applyRolePreset(role) {
+        const preset = this._rolePresets[role];
+        if (!preset) return;
+        this._ufSelectedPaths = [...preset.allowed_paths];
+        this._renderFolderPicker('uf_folder_picker');
+        this._renderPermCheckboxes('uf_perms_container', preset);
+    },
+
+    _userFormHtml(mode, user) {
+        const isEdit = mode === 'edit';
+        const currentRole = isEdit ? user.role : 'employee';
+        const title = isEdit ? `Edit User: ${this.escHtml(user.username)}` : 'Add User';
+        const submitLabel = isEdit ? 'Save Changes' : 'Add User';
+        const submitFn = isEdit ? `App._submitEditUser('${this.escAttr(user.username)}')` : 'App._submitAddUser()';
+
+        return `
+            <div class="users-panel" style="width:520px;">
+                <div class="users-panel-header">
+                    <h2>${title}</h2>
+                    <button class="btn btn-sm btn-ghost" onclick="document.getElementById('userFormOverlay').remove()">${this.icons.close}</button>
+                </div>
+                <div class="users-panel-body">
+                    <div class="user-form">
+                        <div class="user-form-row">
+                            <div>
+                                <label>Username</label>
+                                <input type="text" id="uf_username" value="${isEdit ? this.escAttr(user.username) : ''}" ${isEdit ? 'readonly style="opacity:0.6;cursor:not-allowed;"' : 'placeholder="e.g. john"'} />
+                            </div>
+                            <div>
+                                <label>Display Name</label>
+                                <input type="text" id="uf_displayname" value="${isEdit ? this.escAttr(user.display_name || '') : ''}" placeholder="e.g. John Doe" />
+                            </div>
+                        </div>
+                        ${!isEdit ? `<div>
+                            <label>Password</label>
+                            <input type="password" id="uf_password" placeholder="Min 6 characters" />
+                        </div>` : ''}
+                        <div>
+                            <label>Role</label>
+                            <select id="uf_role" onchange="App._applyRolePreset(this.value)">
+                                <option value="admin" ${currentRole === 'admin' ? 'selected' : ''}>Admin - Full access</option>
+                                <option value="employee" ${currentRole === 'employee' ? 'selected' : ''}>Employee - Upload, edit, no delete</option>
+                                <option value="client" ${currentRole === 'client' ? 'selected' : ''}>Client - View and download only</option>
+                            </select>
+                        </div>
+                        <div class="uf-section-title">Folder Access</div>
+                        <div class="folder-picker" id="uf_folder_picker"></div>
+                        <div class="uf-section-title">Permissions</div>
+                        <div class="permissions-grid" id="uf_perms_container"></div>
+                        <div class="user-form-actions">
+                            <button class="btn btn-sm" onclick="document.getElementById('userFormOverlay').remove()">Cancel</button>
+                            <button class="btn btn-sm btn-primary" onclick="${submitFn}">${submitLabel}</button>
+                        </div>
+                    </div>
+                </div>
+            </div>`;
+    },
+
+    async showAddUserModal() {
+        const existing = document.getElementById('userFormOverlay');
+        if (existing) existing.remove();
+
+        const defaultRole = 'employee';
+        const preset = this._rolePresets[defaultRole];
+        this._ufSelectedPaths = [...preset.allowed_paths];
+        await this._loadRootFolders();
+
+        const overlay = document.createElement('div');
+        overlay.id = 'userFormOverlay';
+        overlay.className = 'um-overlay z-high';
+        overlay.innerHTML = this._userFormHtml('add', null);
+        document.body.appendChild(overlay);
+        overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
+
+        this._renderFolderPicker('uf_folder_picker');
+        this._renderPermCheckboxes('uf_perms_container', preset);
     },
 
     async _submitAddUser() {
@@ -1252,24 +1475,17 @@ const App = {
         const display_name = document.getElementById('uf_displayname').value.trim();
         const password = document.getElementById('uf_password').value;
         const role = document.getElementById('uf_role').value;
-        const pathsRaw = document.getElementById('uf_paths').value.trim();
 
         if (!username || !password || !display_name) {
             this.toast('Username, display name, and password are required', 'error');
             return;
         }
+        if (password.length < 6) {
+            this.toast('Password must be at least 6 characters', 'error');
+            return;
+        }
 
-        const allowed_paths = pathsRaw === '*' ? ['*'] : pathsRaw.split(',').map(p => p.trim()).filter(Boolean);
-
-        const permissions = {
-            can_upload: document.getElementById('uf_can_upload').checked,
-            can_edit: document.getElementById('uf_can_edit').checked,
-            can_delete: document.getElementById('uf_can_delete').checked,
-            can_download: document.getElementById('uf_can_download').checked,
-            can_create_folder: document.getElementById('uf_can_create_folder').checked,
-            can_review: document.getElementById('uf_can_review').checked,
-            allowed_paths: allowed_paths
-        };
+        const permissions = this._getFormPermissions();
 
         try {
             const res = await this.apiFetch('api.php', {
@@ -1279,91 +1495,38 @@ const App = {
             });
             const data = await res.json();
             if (data.success) {
-                this.toast('User created', 'success');
-                const formOverlay = document.getElementById('userFormOverlay');
-                if (formOverlay) formOverlay.remove();
+                this.toast('User created successfully', 'success');
+                document.getElementById('userFormOverlay')?.remove();
                 this.showUsersPanel();
             } else {
                 this.toast('Failed: ' + (data.error || ''), 'error');
             }
-        } catch (e) {
-            this.toast('Error: ' + e.message, 'error');
-        }
+        } catch (e) { this.toast('Error: ' + e.message, 'error'); }
     },
 
-    showEditUserModal(user) {
+    async showEditUserModal(user) {
         const existing = document.getElementById('userFormOverlay');
         if (existing) existing.remove();
 
         const perms = user.permissions || {};
-        const allowedPaths = Array.isArray(perms.allowed_paths) ? perms.allowed_paths.join(', ') : (perms.allowed_paths || '*');
+        this._ufSelectedPaths = Array.isArray(perms.allowed_paths) ? [...perms.allowed_paths] : ['*'];
+        await this._loadRootFolders();
 
         const overlay = document.createElement('div');
         overlay.id = 'userFormOverlay';
-        overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:1100;display:flex;align-items:center;justify-content:center;padding:20px;';
-
-        overlay.innerHTML = `
-            <div style="background:var(--bg-primary, #fff);border-radius:12px;max-width:500px;width:100%;max-height:90vh;overflow:auto;box-shadow:0 25px 50px -12px rgba(0,0,0,0.25);">
-                <div style="display:flex;align-items:center;justify-content:space-between;padding:16px 20px;border-bottom:1px solid var(--border-color, #e2e8f0);">
-                    <h3 style="margin:0;font-size:16px;font-weight:600;">Edit User: ${this.escHtml(user.username)}</h3>
-                    <button class="btn btn-sm btn-ghost" onclick="document.getElementById('userFormOverlay').remove()">${this.icons.close}</button>
-                </div>
-                <div style="padding:20px;display:flex;flex-direction:column;gap:12px;">
-                    <div>
-                        <label style="display:block;font-size:12px;font-weight:600;margin-bottom:4px;">Username</label>
-                        <input type="text" id="uf_username" value="${this.escAttr(user.username)}" readonly style="width:100%;padding:8px 10px;border:1px solid var(--border-color, #e2e8f0);border-radius:6px;font-size:13px;background:var(--bg-secondary, #f8fafc);box-sizing:border-box;" />
-                    </div>
-                    <div>
-                        <label style="display:block;font-size:12px;font-weight:600;margin-bottom:4px;">Display Name</label>
-                        <input type="text" id="uf_displayname" value="${this.escAttr(user.display_name || '')}" style="width:100%;padding:8px 10px;border:1px solid var(--border-color, #e2e8f0);border-radius:6px;font-size:13px;box-sizing:border-box;" />
-                    </div>
-                    <div>
-                        <label style="display:block;font-size:12px;font-weight:600;margin-bottom:4px;">Role</label>
-                        <select id="uf_role" style="width:100%;padding:8px 10px;border:1px solid var(--border-color, #e2e8f0);border-radius:6px;font-size:13px;box-sizing:border-box;">
-                            <option value="client" ${user.role === 'client' ? 'selected' : ''}>Client</option>
-                            <option value="admin" ${user.role === 'admin' ? 'selected' : ''}>Admin</option>
-                        </select>
-                    </div>
-                    <div>
-                        <label style="display:block;font-size:12px;font-weight:600;margin-bottom:4px;">Allowed Paths (comma-separated, or * for all)</label>
-                        <textarea id="uf_paths" style="width:100%;padding:8px 10px;border:1px solid var(--border-color, #e2e8f0);border-radius:6px;font-size:13px;min-height:40px;box-sizing:border-box;">${this.escHtml(allowedPaths)}</textarea>
-                    </div>
-                    <div style="display:flex;flex-wrap:wrap;gap:12px;">
-                        <label style="display:flex;align-items:center;gap:4px;font-size:13px;"><input type="checkbox" id="uf_can_upload" ${perms.can_upload ? 'checked' : ''} /> Upload</label>
-                        <label style="display:flex;align-items:center;gap:4px;font-size:13px;"><input type="checkbox" id="uf_can_edit" ${perms.can_edit ? 'checked' : ''} /> Edit</label>
-                        <label style="display:flex;align-items:center;gap:4px;font-size:13px;"><input type="checkbox" id="uf_can_delete" ${perms.can_delete ? 'checked' : ''} /> Delete</label>
-                        <label style="display:flex;align-items:center;gap:4px;font-size:13px;"><input type="checkbox" id="uf_can_download" ${perms.can_download ? 'checked' : ''} /> Download</label>
-                        <label style="display:flex;align-items:center;gap:4px;font-size:13px;"><input type="checkbox" id="uf_can_create_folder" ${perms.can_create_folder ? 'checked' : ''} /> Create Folder</label>
-                        <label style="display:flex;align-items:center;gap:4px;font-size:13px;"><input type="checkbox" id="uf_can_review" ${perms.can_review ? 'checked' : ''} /> Review</label>
-                    </div>
-                    <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:8px;">
-                        <button class="btn btn-sm" onclick="document.getElementById('userFormOverlay').remove()">Cancel</button>
-                        <button class="btn btn-sm btn-primary" onclick="App._submitEditUser('${this.escAttr(user.username)}')">Save Changes</button>
-                    </div>
-                </div>
-            </div>
-        `;
-
+        overlay.className = 'um-overlay z-high';
+        overlay.innerHTML = this._userFormHtml('edit', user);
         document.body.appendChild(overlay);
         overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
+
+        this._renderFolderPicker('uf_folder_picker');
+        this._renderPermCheckboxes('uf_perms_container', perms);
     },
 
     async _submitEditUser(username) {
         const display_name = document.getElementById('uf_displayname').value.trim();
         const role = document.getElementById('uf_role').value;
-        const pathsRaw = document.getElementById('uf_paths').value.trim();
-
-        const allowed_paths = pathsRaw === '*' ? ['*'] : pathsRaw.split(',').map(p => p.trim()).filter(Boolean);
-
-        const permissions = {
-            can_upload: document.getElementById('uf_can_upload').checked,
-            can_edit: document.getElementById('uf_can_edit').checked,
-            can_delete: document.getElementById('uf_can_delete').checked,
-            can_download: document.getElementById('uf_can_download').checked,
-            can_create_folder: document.getElementById('uf_can_create_folder').checked,
-            can_review: document.getElementById('uf_can_review').checked,
-            allowed_paths: allowed_paths
-        };
+        const permissions = this._getFormPermissions();
 
         try {
             const res = await this.apiFetch('api.php', {
@@ -1374,15 +1537,12 @@ const App = {
             const data = await res.json();
             if (data.success) {
                 this.toast('User updated', 'success');
-                const formOverlay = document.getElementById('userFormOverlay');
-                if (formOverlay) formOverlay.remove();
+                document.getElementById('userFormOverlay')?.remove();
                 this.showUsersPanel();
             } else {
                 this.toast('Failed: ' + (data.error || ''), 'error');
             }
-        } catch (e) {
-            this.toast('Error: ' + e.message, 'error');
-        }
+        } catch (e) { this.toast('Error: ' + e.message, 'error'); }
     },
 
     showChangePasswordModal(username) {
@@ -1391,27 +1551,28 @@ const App = {
 
         const overlay = document.createElement('div');
         overlay.id = 'userFormOverlay';
-        overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:1100;display:flex;align-items:center;justify-content:center;padding:20px;';
+        overlay.className = 'um-overlay z-high';
 
         overlay.innerHTML = `
-            <div style="background:var(--bg-primary, #fff);border-radius:12px;max-width:400px;width:100%;box-shadow:0 25px 50px -12px rgba(0,0,0,0.25);">
-                <div style="display:flex;align-items:center;justify-content:space-between;padding:16px 20px;border-bottom:1px solid var(--border-color, #e2e8f0);">
-                    <h3 style="margin:0;font-size:16px;font-weight:600;display:flex;align-items:center;gap:8px;">${this.icons.key} Change Password</h3>
+            <div class="users-panel" style="width:400px;">
+                <div class="users-panel-header">
+                    <h2>${this.icons.key} Change Password</h2>
                     <button class="btn btn-sm btn-ghost" onclick="document.getElementById('userFormOverlay').remove()">${this.icons.close}</button>
                 </div>
-                <div style="padding:20px;display:flex;flex-direction:column;gap:12px;">
-                    <p style="margin:0;font-size:13px;color:var(--text-muted, #94a3b8);">Changing password for <strong>${this.escHtml(username)}</strong></p>
-                    <div>
-                        <label style="display:block;font-size:12px;font-weight:600;margin-bottom:4px;">New Password</label>
-                        <input type="password" id="uf_newpassword" style="width:100%;padding:8px 10px;border:1px solid var(--border-color, #e2e8f0);border-radius:6px;font-size:13px;box-sizing:border-box;" />
-                    </div>
-                    <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:8px;">
-                        <button class="btn btn-sm" onclick="document.getElementById('userFormOverlay').remove()">Cancel</button>
-                        <button class="btn btn-sm btn-primary" onclick="App._submitChangePassword('${this.escAttr(username)}')">Change Password</button>
+                <div class="users-panel-body">
+                    <div class="user-form">
+                        <p style="font-size:13px;color:var(--text-muted);">Changing password for <strong>${this.escHtml(username)}</strong></p>
+                        <div>
+                            <label>New Password</label>
+                            <input type="password" id="uf_newpassword" placeholder="Min 6 characters" />
+                        </div>
+                        <div class="user-form-actions">
+                            <button class="btn btn-sm" onclick="document.getElementById('userFormOverlay').remove()">Cancel</button>
+                            <button class="btn btn-sm btn-primary" onclick="App._submitChangePassword('${this.escAttr(username)}')">Change Password</button>
+                        </div>
                     </div>
                 </div>
-            </div>
-        `;
+            </div>`;
 
         document.body.appendChild(overlay);
         overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
@@ -1419,8 +1580,8 @@ const App = {
 
     async _submitChangePassword(username) {
         const password = document.getElementById('uf_newpassword').value;
-        if (!password) {
-            this.toast('Password is required', 'error');
+        if (!password || password.length < 6) {
+            this.toast('Password must be at least 6 characters', 'error');
             return;
         }
         try {
@@ -1432,14 +1593,11 @@ const App = {
             const data = await res.json();
             if (data.success) {
                 this.toast('Password changed', 'success');
-                const formOverlay = document.getElementById('userFormOverlay');
-                if (formOverlay) formOverlay.remove();
+                document.getElementById('userFormOverlay')?.remove();
             } else {
                 this.toast('Failed: ' + (data.error || ''), 'error');
             }
-        } catch (e) {
-            this.toast('Error: ' + e.message, 'error');
-        }
+        } catch (e) { this.toast('Error: ' + e.message, 'error'); }
     },
 
     async deleteUserItem(username) {
@@ -1457,9 +1615,1220 @@ const App = {
             } else {
                 this.toast('Failed: ' + (data.error || ''), 'error');
             }
-        } catch (e) {
-            this.toast('Error: ' + e.message, 'error');
+        } catch (e) { this.toast('Error: ' + e.message, 'error'); }
+    },
+
+    // === Teams / Groups Management ===
+
+    async showTeamsPanel() {
+        if (!this.isAdmin()) { this.toast('Admin access required', 'error'); return; }
+        try {
+            const res = await this.apiFetch('api.php?action=getTeams');
+            const data = await res.json();
+            if (!data.success) { this.toast('Failed to load teams: ' + (data.error || ''), 'error'); return; }
+            this._renderTeamsPanel(data.teams || []);
+        } catch (e) { this.toast('Error: ' + e.message, 'error'); }
+    },
+
+    _renderTeamsPanel(teams) {
+        const existing = document.getElementById('teamsPanelOverlay');
+        if (existing) existing.remove();
+
+        const overlay = document.createElement('div');
+        overlay.id = 'teamsPanelOverlay';
+        overlay.className = 'um-overlay';
+
+        let teamsHtml = '';
+        if (teams.length === 0) {
+            teamsHtml = '<div class="teams-empty">No teams yet. Create your first team to organize users into groups with shared permissions.</div>';
+        } else {
+            teams.forEach(t => {
+                const perms = t.permissions || {};
+                const paths = Array.isArray(perms.allowed_paths) ? perms.allowed_paths : [];
+                const pathDisplay = paths.includes('*') ? 'All folders' : (paths.length > 0 ? paths.join(', ') : 'No folders');
+                const members = t.members || [];
+                const memberNames = members.map(m => m.username).join(', ') || 'No members';
+                const tJson = this.escAttr(JSON.stringify(t));
+
+                const permLabels = { can_upload: 'Upload', can_edit: 'Edit', can_delete: 'Delete', can_download: 'Download', can_create_folder: 'Folder', can_review: 'Review' };
+                let permTags = '';
+                for (const [key, label] of Object.entries(permLabels)) {
+                    permTags += `<span class="user-perm-tag ${perms[key] ? 'active' : ''}">${label}</span>`;
+                }
+
+                teamsHtml += `
+                <div class="team-card">
+                    <div class="team-card-header">
+                        <div class="team-card-info">
+                            <h3 class="team-card-name">${this.icons.team} ${this.escHtml(t.name)}</h3>
+                            ${t.description ? `<p class="team-card-desc">${this.escHtml(t.description)}</p>` : ''}
+                        </div>
+                        <div class="team-card-actions">
+                            <button class="btn btn-sm btn-ghost" onclick="App.showEditTeamModal(${tJson})" title="Edit">${this.icons.edit}</button>
+                            <button class="btn btn-sm btn-ghost" style="color:var(--danger);" onclick="App.deleteTeamItem('${this.escAttr(t.id)}','${this.escAttr(t.name)}')" title="Delete">${this.icons.trash}</button>
+                        </div>
+                    </div>
+                    <div class="team-card-meta">
+                        <div class="team-meta-item">
+                            <span class="team-meta-label">Members (${members.length})</span>
+                            <span class="team-meta-value">${this.escHtml(memberNames)}</span>
+                        </div>
+                        <div class="team-meta-item">
+                            <span class="team-meta-label">Folder Access</span>
+                            <span class="team-meta-value" title="${this.escAttr(pathDisplay)}">${this.escHtml(pathDisplay)}</span>
+                        </div>
+                    </div>
+                    <div class="team-card-perms">
+                        <div class="user-perms-tags">${permTags}</div>
+                    </div>
+                    <div class="team-card-footer">
+                        <button class="btn btn-xs btn-ghost" onclick="App.showManageMembersModal('${this.escAttr(t.id)}', ${tJson})">${this.icons.users} Manage Members</button>
+                        <button class="btn btn-xs btn-ghost" onclick="App.showFilePermissionsModal('${this.escAttr(t.id)}', 'team', '${this.escAttr(t.name)}')">${this.icons.shield} File Permissions</button>
+                    </div>
+                </div>`;
+            });
         }
+
+        overlay.innerHTML = `
+            <div class="users-panel" style="width:720px;">
+                <div class="users-panel-header">
+                    <h2>${this.icons.team} Teams & Groups</h2>
+                    <div style="display:flex;gap:8px;">
+                        <button class="btn btn-sm btn-primary" onclick="App.showCreateTeamModal()">+ New Team</button>
+                        <button class="btn btn-sm btn-ghost" onclick="document.getElementById('teamsPanelOverlay').remove()">${this.icons.close}</button>
+                    </div>
+                </div>
+                <div class="users-panel-body">
+                    <div class="teams-grid">${teamsHtml}</div>
+                </div>
+            </div>`;
+
+        document.body.appendChild(overlay);
+        overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
+    },
+
+    showCreateTeamModal() {
+        this._showTeamFormModal('create', null);
+    },
+
+    showEditTeamModal(team) {
+        this._showTeamFormModal('edit', team);
+    },
+
+    async _showTeamFormModal(mode, team) {
+        const existing = document.getElementById('teamFormOverlay');
+        if (existing) existing.remove();
+
+        const isEdit = mode === 'edit';
+        const perms = isEdit ? (team.permissions || {}) : this._rolePresets.employee;
+        this._ufSelectedPaths = isEdit ? (Array.isArray(perms.allowed_paths) ? [...perms.allowed_paths] : ['*']) : ['*'];
+        await this._loadRootFolders();
+
+        const title = isEdit ? `Edit Team: ${this.escHtml(team.name)}` : 'Create Team';
+        const submitLabel = isEdit ? 'Save Changes' : 'Create Team';
+        const submitFn = isEdit ? `App._submitTeamForm('edit','${this.escAttr(team.id)}')` : `App._submitTeamForm('create','')`;
+
+        const overlay = document.createElement('div');
+        overlay.id = 'teamFormOverlay';
+        overlay.className = 'um-overlay z-high';
+        overlay.innerHTML = `
+            <div class="users-panel" style="width:520px;">
+                <div class="users-panel-header">
+                    <h2>${title}</h2>
+                    <button class="btn btn-sm btn-ghost" onclick="document.getElementById('teamFormOverlay').remove()">${this.icons.close}</button>
+                </div>
+                <div class="users-panel-body">
+                    <div class="user-form">
+                        <div>
+                            <label>Team Name</label>
+                            <input type="text" id="tf_name" value="${isEdit ? this.escAttr(team.name) : ''}" placeholder="e.g. Design Team" />
+                        </div>
+                        <div>
+                            <label>Description</label>
+                            <textarea id="tf_desc" rows="2" placeholder="Team description (optional)">${isEdit ? this.escHtml(team.description || '') : ''}</textarea>
+                        </div>
+                        <div class="uf-section-title">Folder Access</div>
+                        <div class="folder-picker" id="tf_folder_picker"></div>
+                        <div class="uf-section-title">Team Permissions</div>
+                        <div class="permissions-grid" id="tf_perms_container"></div>
+                        <div class="user-form-actions">
+                            <button class="btn btn-sm" onclick="document.getElementById('teamFormOverlay').remove()">Cancel</button>
+                            <button class="btn btn-sm btn-primary" onclick="${submitFn}">${submitLabel}</button>
+                        </div>
+                    </div>
+                </div>
+            </div>`;
+
+        document.body.appendChild(overlay);
+        overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
+
+        this._renderFolderPicker('tf_folder_picker');
+        this._renderPermCheckboxes('tf_perms_container', perms);
+    },
+
+    _getTeamFormPermissions() {
+        const perms = {};
+        document.querySelectorAll('#tf_perms_container .perm-checkbox').forEach(label => {
+            perms[label.dataset.key] = label.querySelector('input').checked;
+        });
+        perms.allowed_paths = [...this._ufSelectedPaths];
+        return perms;
+    },
+
+    async _submitTeamForm(mode, teamId) {
+        const name = document.getElementById('tf_name').value.trim();
+        const description = document.getElementById('tf_desc').value.trim();
+        const permissions = this._getTeamFormPermissions();
+
+        if (!name) {
+            this.toast('Team name is required', 'error');
+            return;
+        }
+
+        const action = mode === 'edit' ? 'updateTeam' : 'createTeam';
+        const body = mode === 'edit'
+            ? { action, team_id: teamId, name, description, permissions }
+            : { action, name, description, permissions };
+
+        try {
+            const res = await this.apiFetch('api.php', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(body)
+            });
+            const data = await res.json();
+            if (data.success) {
+                this.toast(mode === 'edit' ? 'Team updated' : 'Team created', 'success');
+                document.getElementById('teamFormOverlay')?.remove();
+                this.showTeamsPanel();
+            } else {
+                this.toast('Failed: ' + (data.error || ''), 'error');
+            }
+        } catch (e) { this.toast('Error: ' + e.message, 'error'); }
+    },
+
+    async deleteTeamItem(teamId, teamName) {
+        if (!confirm(`Delete team "${teamName}"? All members will be removed.`)) return;
+        try {
+            const res = await this.apiFetch('api.php', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ action: 'deleteTeam', team_id: teamId })
+            });
+            const data = await res.json();
+            if (data.success) {
+                this.toast('Team deleted', 'success');
+                this.showTeamsPanel();
+            } else {
+                this.toast('Failed: ' + (data.error || ''), 'error');
+            }
+        } catch (e) { this.toast('Error: ' + e.message, 'error'); }
+    },
+
+    async showManageMembersModal(teamId, team) {
+        const existing = document.getElementById('teamMembersOverlay');
+        if (existing) existing.remove();
+
+        // Get current users list
+        let allUsers = [];
+        try {
+            const res = await this.apiFetch('api.php?action=getUsers');
+            const data = await res.json();
+            if (data.success) allUsers = data.users || [];
+        } catch (e) { /* ignore */ }
+
+        const members = team.members || [];
+        const memberUsernames = members.map(m => m.username);
+        const availableUsers = allUsers.filter(u => !memberUsernames.includes(u.username));
+
+        let membersHtml = '';
+        if (members.length === 0) {
+            membersHtml = '<div style="padding:16px;text-align:center;color:var(--text-muted);font-size:13px;">No members yet</div>';
+        } else {
+            members.forEach(m => {
+                const user = allUsers.find(u => u.username === m.username);
+                const displayName = user ? user.display_name : m.username;
+                const role = user ? user.role : '';
+                membersHtml += `
+                <div class="team-member-row">
+                    <div class="team-member-info">
+                        <span class="team-member-name">${this.escHtml(displayName)}</span>
+                        <span class="team-member-username">@${this.escHtml(m.username)}</span>
+                        ${role ? `<span class="user-role-badge ${role}">${role}</span>` : ''}
+                    </div>
+                    <button class="btn btn-xs btn-ghost" style="color:var(--danger);" onclick="App._removeTeamMember('${this.escAttr(teamId)}','${this.escAttr(m.username)}')">${this.icons.close}</button>
+                </div>`;
+            });
+        }
+
+        let addUserHtml = '';
+        if (availableUsers.length > 0) {
+            let options = availableUsers.map(u => `<option value="${this.escAttr(u.username)}">${this.escHtml(u.display_name)} (@${this.escHtml(u.username)})</option>`).join('');
+            addUserHtml = `
+            <div class="team-add-member">
+                <select id="tm_add_user">${options}</select>
+                <button class="btn btn-sm btn-primary" onclick="App._addTeamMember('${this.escAttr(teamId)}')">Add</button>
+            </div>`;
+        } else {
+            addUserHtml = '<div style="padding:8px;text-align:center;color:var(--text-muted);font-size:12px;">All users are already members</div>';
+        }
+
+        const overlay = document.createElement('div');
+        overlay.id = 'teamMembersOverlay';
+        overlay.className = 'um-overlay z-high';
+        overlay.innerHTML = `
+            <div class="users-panel" style="width:440px;">
+                <div class="users-panel-header">
+                    <h2>${this.icons.users} ${this.escHtml(team.name)} - Members</h2>
+                    <button class="btn btn-sm btn-ghost" onclick="document.getElementById('teamMembersOverlay').remove()">${this.icons.close}</button>
+                </div>
+                <div class="users-panel-body">
+                    <div class="uf-section-title">Add Member</div>
+                    ${addUserHtml}
+                    <div class="uf-section-title" style="margin-top:16px;">Current Members (${members.length})</div>
+                    <div class="team-members-list">${membersHtml}</div>
+                </div>
+            </div>`;
+
+        document.body.appendChild(overlay);
+        overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
+    },
+
+    async _addTeamMember(teamId) {
+        const select = document.getElementById('tm_add_user');
+        if (!select) return;
+        const username = select.value;
+        if (!username) return;
+
+        try {
+            const res = await this.apiFetch('api.php', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ action: 'addTeamMember', team_id: teamId, username })
+            });
+            const data = await res.json();
+            if (data.success) {
+                this.toast('Member added', 'success');
+                // Refresh both panels
+                document.getElementById('teamMembersOverlay')?.remove();
+                this.showTeamsPanel();
+            } else {
+                this.toast('Failed: ' + (data.error || ''), 'error');
+            }
+        } catch (e) { this.toast('Error: ' + e.message, 'error'); }
+    },
+
+    async _removeTeamMember(teamId, username) {
+        if (!confirm(`Remove ${username} from this team?`)) return;
+        try {
+            const res = await this.apiFetch('api.php', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ action: 'removeTeamMember', team_id: teamId, username })
+            });
+            const data = await res.json();
+            if (data.success) {
+                this.toast('Member removed', 'success');
+                document.getElementById('teamMembersOverlay')?.remove();
+                this.showTeamsPanel();
+            } else {
+                this.toast('Failed: ' + (data.error || ''), 'error');
+            }
+        } catch (e) { this.toast('Error: ' + e.message, 'error'); }
+    },
+
+    // === File-Level Permissions ===
+
+    async showFilePermissionsModal(targetId, targetType, targetName) {
+        const existing = document.getElementById('filePermOverlay');
+        if (existing) existing.remove();
+
+        const overlay = document.createElement('div');
+        overlay.id = 'filePermOverlay';
+        overlay.className = 'um-overlay z-high';
+        overlay.innerHTML = `
+            <div class="users-panel" style="width:600px;">
+                <div class="users-panel-header">
+                    <h2>${this.icons.shield} File Permissions - ${this.escHtml(targetName)}</h2>
+                    <button class="btn btn-sm btn-ghost" onclick="document.getElementById('filePermOverlay').remove()">${this.icons.close}</button>
+                </div>
+                <div class="users-panel-body">
+                    <div class="uf-section-title">Add File/Folder Permission</div>
+                    <div class="fileperm-add-form">
+                        <div class="user-form-row">
+                            <div>
+                                <label>File or Folder Path</label>
+                                <input type="text" id="fperm_path" placeholder="e.g. projects/designs/" />
+                            </div>
+                            <div>
+                                <label>Expires (optional)</label>
+                                <input type="datetime-local" id="fperm_expires" />
+                            </div>
+                        </div>
+                        <div class="uf-section-title">Permissions to Grant</div>
+                        <div class="permissions-grid" id="fperm_perms_container"></div>
+                        <div style="margin-top:10px;">
+                            <button class="btn btn-sm btn-primary" onclick="App._submitFilePermission('${this.escAttr(targetId)}','${this.escAttr(targetType)}')">Grant Permission</button>
+                        </div>
+                    </div>
+                    <div class="uf-section-title" style="margin-top:20px;">Active File Permissions</div>
+                    <div id="fperm_list" class="fperm-list">
+                        <div style="padding:16px;text-align:center;color:var(--text-muted);">Loading...</div>
+                    </div>
+                </div>
+            </div>`;
+
+        document.body.appendChild(overlay);
+        overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
+
+        const defaultPerms = { can_upload: false, can_edit: false, can_delete: false, can_download: true, can_create_folder: false, can_review: true };
+        this._renderPermCheckboxes('fperm_perms_container', defaultPerms);
+
+        this._loadActiveFilePermissions(targetId, targetType);
+    },
+
+    async _loadActiveFilePermissions(targetId, targetType) {
+        const listEl = document.getElementById('fperm_list');
+        if (!listEl) return;
+
+        // We need to query all file permissions and filter on client side for this target
+        // Since we don't have a dedicated endpoint, we'll search by iterating
+        // Let's use a simple approach: get all and filter
+        try {
+            const res = await this.apiFetch('api.php', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ action: 'getFilePermissions', file_path: '*' })
+            });
+            // This won't work since we need a different approach
+            // Let's just show a note for now and load per-path
+        } catch (e) { /* ignore */ }
+
+        listEl.innerHTML = `<div style="padding:12px;text-align:center;color:var(--text-muted);font-size:12px;">
+            File permissions are shown per-file. Select a file in the file browser, then use the context menu to manage its permissions.
+        </div>`;
+    },
+
+    async _submitFilePermission(targetId, targetType) {
+        const filePath = document.getElementById('fperm_path')?.value.trim();
+        const expiresInput = document.getElementById('fperm_expires')?.value;
+        const expiresAt = expiresInput ? new Date(expiresInput).toISOString() : null;
+
+        if (!filePath) {
+            this.toast('File/folder path is required', 'error');
+            return;
+        }
+
+        const perms = {};
+        document.querySelectorAll('#fperm_perms_container .perm-checkbox').forEach(label => {
+            perms[label.dataset.key] = label.querySelector('input').checked;
+        });
+
+        try {
+            const res = await this.apiFetch('api.php', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    action: 'setFilePermission',
+                    file_path: filePath,
+                    target_type: targetType,
+                    target_id: targetId,
+                    permissions: perms,
+                    expires_at: expiresAt
+                })
+            });
+            const data = await res.json();
+            if (data.success) {
+                this.toast('Permission granted' + (expiresAt ? ' (temporary)' : ''), 'success');
+                document.getElementById('fperm_path').value = '';
+                document.getElementById('fperm_expires').value = '';
+            } else {
+                this.toast('Failed: ' + (data.error || ''), 'error');
+            }
+        } catch (e) { this.toast('Error: ' + e.message, 'error'); }
+    },
+
+    // File context menu file permissions (for admin)
+    async showFilePermPanel(filePath) {
+        if (!this.isAdmin()) return;
+        const existing = document.getElementById('filePermDetailOverlay');
+        if (existing) existing.remove();
+
+        let permsData = [];
+        try {
+            const res = await this.apiFetch(`api.php?action=getFilePermissions&file_path=${encodeURIComponent(filePath)}`);
+            const data = await res.json();
+            if (data.success) permsData = data.permissions || [];
+        } catch (e) { /* ignore */ }
+
+        // Get teams and users for adding
+        let allTeams = [], allUsers = [];
+        try {
+            const [tRes, uRes] = await Promise.all([
+                this.apiFetch('api.php?action=getTeams'),
+                this.apiFetch('api.php?action=getUsers')
+            ]);
+            const tData = await tRes.json();
+            const uData = await uRes.json();
+            if (tData.success) allTeams = tData.teams || [];
+            if (uData.success) allUsers = uData.users || [];
+        } catch (e) { /* ignore */ }
+
+        let existingPermsHtml = '';
+        if (permsData.length === 0) {
+            existingPermsHtml = '<div style="padding:12px;text-align:center;color:var(--text-muted);font-size:12px;">No file-specific permissions set</div>';
+        } else {
+            permsData.forEach(fp => {
+                const fpPerms = fp.permissions || {};
+                const permLabels = { can_upload: 'Upload', can_edit: 'Edit', can_delete: 'Delete', can_download: 'Download', can_create_folder: 'Folder', can_review: 'Review' };
+                let tags = '';
+                for (const [key, label] of Object.entries(permLabels)) {
+                    if (fpPerms[key]) tags += `<span class="user-perm-tag active">${label}</span>`;
+                }
+                const isExpired = fp.expires_at && new Date(fp.expires_at) < new Date();
+                const expiryText = fp.expires_at ? (isExpired ? '<span style="color:var(--danger);">Expired</span>' : `Expires: ${this.formatDate(fp.expires_at)}`) : 'Permanent';
+                const targetLabel = fp.target_type === 'team' ? '(Team)' : '(User)';
+
+                existingPermsHtml += `
+                <div class="fperm-item ${isExpired ? 'expired' : ''}">
+                    <div class="fperm-item-header">
+                        <span class="fperm-target">${this.escHtml(fp.target_id)} ${targetLabel}</span>
+                        <button class="btn btn-xs btn-ghost" style="color:var(--danger);" onclick="App._removeFilePerm('${this.escAttr(fp.id)}','${this.escAttr(filePath)}')">${this.icons.close}</button>
+                    </div>
+                    <div class="user-perms-tags" style="margin:4px 0;">${tags}</div>
+                    <div class="fperm-expiry">${this.icons.clock} ${expiryText}</div>
+                </div>`;
+            });
+        }
+
+        // Build add form
+        let targetOptions = '';
+        allUsers.forEach(u => {
+            targetOptions += `<option value="user:${this.escAttr(u.username)}">${this.escHtml(u.display_name)} (User)</option>`;
+        });
+        allTeams.forEach(t => {
+            targetOptions += `<option value="team:${this.escAttr(t.id)}">${this.escHtml(t.name)} (Team)</option>`;
+        });
+
+        const overlay = document.createElement('div');
+        overlay.id = 'filePermDetailOverlay';
+        overlay.className = 'um-overlay z-high';
+        overlay.innerHTML = `
+            <div class="users-panel" style="width:500px;">
+                <div class="users-panel-header">
+                    <h2>${this.icons.shield} Permissions: ${this.escHtml(filePath.split('/').pop() || filePath)}</h2>
+                    <button class="btn btn-sm btn-ghost" onclick="document.getElementById('filePermDetailOverlay').remove()">${this.icons.close}</button>
+                </div>
+                <div class="users-panel-body">
+                    <div class="uf-section-title">Grant Access</div>
+                    <div class="fileperm-add-form">
+                        <div class="user-form-row">
+                            <div>
+                                <label>User or Team</label>
+                                <select id="fpdtl_target">${targetOptions}</select>
+                            </div>
+                            <div>
+                                <label>Expires (optional)</label>
+                                <input type="datetime-local" id="fpdtl_expires" />
+                            </div>
+                        </div>
+                        <div class="permissions-grid" id="fpdtl_perms"></div>
+                        <div style="margin-top:8px;">
+                            <button class="btn btn-sm btn-primary" onclick="App._submitFilePermDetail('${this.escAttr(filePath)}')">Grant</button>
+                        </div>
+                    </div>
+                    <div class="uf-section-title" style="margin-top:16px;">Current Permissions (${permsData.length})</div>
+                    <div class="fperm-list">${existingPermsHtml}</div>
+                </div>
+            </div>`;
+
+        document.body.appendChild(overlay);
+        overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
+
+        const defaultPerms = { can_upload: false, can_edit: false, can_delete: false, can_download: true, can_create_folder: false, can_review: true };
+        this._renderPermCheckboxes('fpdtl_perms', defaultPerms);
+    },
+
+    async _submitFilePermDetail(filePath) {
+        const targetSelect = document.getElementById('fpdtl_target');
+        const expiresInput = document.getElementById('fpdtl_expires')?.value;
+        if (!targetSelect || !targetSelect.value) {
+            this.toast('Select a user or team', 'error');
+            return;
+        }
+
+        const [targetType, targetId] = targetSelect.value.split(':');
+        const expiresAt = expiresInput ? new Date(expiresInput).toISOString() : null;
+
+        const perms = {};
+        document.querySelectorAll('#fpdtl_perms .perm-checkbox').forEach(label => {
+            perms[label.dataset.key] = label.querySelector('input').checked;
+        });
+
+        try {
+            const res = await this.apiFetch('api.php', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    action: 'setFilePermission',
+                    file_path: filePath,
+                    target_type: targetType,
+                    target_id: targetId,
+                    permissions: perms,
+                    expires_at: expiresAt
+                })
+            });
+            const data = await res.json();
+            if (data.success) {
+                this.toast('Permission granted', 'success');
+                this.showFilePermPanel(filePath);
+            } else {
+                this.toast('Failed: ' + (data.error || ''), 'error');
+            }
+        } catch (e) { this.toast('Error: ' + e.message, 'error'); }
+    },
+
+    async _removeFilePerm(permId, filePath) {
+        if (!confirm('Remove this permission?')) return;
+        try {
+            const res = await this.apiFetch('api.php', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ action: 'removeFilePermission', perm_id: permId })
+            });
+            const data = await res.json();
+            if (data.success) {
+                this.toast('Permission removed', 'success');
+                this.showFilePermPanel(filePath);
+            } else {
+                this.toast('Failed: ' + (data.error || ''), 'error');
+            }
+        } catch (e) { this.toast('Error: ' + e.message, 'error'); }
+    },
+
+    initNotifications() {
+        this.updateNotifBadge();
+        this._notifPollTimer = setInterval(() => this.updateNotifBadge(), 30000);
+    },
+
+    async updateNotifBadge() {
+        try {
+            const res = await this.apiFetch('api.php?action=getUnreadCount');
+            const data = await res.json();
+            if (data.success) {
+                this._notifCount = data.count;
+                const badge = document.getElementById('notifBadge');
+                if (badge) {
+                    badge.textContent = data.count;
+                    badge.style.display = data.count > 0 ? 'flex' : 'none';
+                }
+            }
+        } catch (e) { /* silent */ }
+    },
+
+    async showNotificationsPanel() {
+        const existing = document.getElementById('notifDropdown');
+        if (existing) { existing.remove(); return; }
+
+        try {
+            const res = await this.apiFetch('api.php?action=getNotifications&limit=50');
+            const data = await res.json();
+            if (!data.success) return;
+
+            const notifs = data.notifications || [];
+            const bell = document.getElementById('notifBell');
+            const dropdown = document.createElement('div');
+            dropdown.id = 'notifDropdown';
+            dropdown.className = 'notif-dropdown';
+
+            let itemsHtml = '';
+            if (notifs.length === 0) {
+                itemsHtml = '<div class="notif-empty">No notifications</div>';
+            } else {
+                notifs.forEach(n => {
+                    const iconClass = n.type === 'approval' ? 'approval' : (n.type === 'upload' ? 'upload' : 'comment');
+                    const icon = n.type === 'approval' ? this.icons.check : (n.type === 'upload' ? this.icons.upload : this.icons.comment);
+                    const unread = !n.is_read ? 'unread' : '';
+                    itemsHtml += `<div class="notif-item ${unread}" onclick="App.handleNotifClick('${this.escAttr(n.id)}', '${this.escAttr(n.target_path || '')}')">
+                        <div class="notif-icon ${iconClass}">${icon}</div>
+                        <div class="notif-content">
+                            <div class="notif-title">${this.escHtml(n.title)}</div>
+                            ${n.message ? `<div class="notif-message">${this.escHtml(n.message)}</div>` : ''}
+                            <div class="notif-time">${this.escHtml(n.source_display_name || '')} &middot; ${this.formatDate(n.created_at)}</div>
+                        </div>
+                    </div>`;
+                });
+            }
+
+            dropdown.innerHTML = `
+                <div class="notif-dropdown-header">
+                    <h3>${this.icons.bell} Notifications</h3>
+                    <button class="btn btn-sm btn-ghost" onclick="App.markAllNotifsRead()">Mark all read</button>
+                </div>
+                <div class="notif-dropdown-body">${itemsHtml}</div>`;
+
+            if (bell) {
+                bell.parentElement.style.position = 'relative';
+                bell.parentElement.appendChild(dropdown);
+            } else {
+                document.body.appendChild(dropdown);
+            }
+
+            setTimeout(() => {
+                document.addEventListener('click', function closeNotif(e) {
+                    if (!dropdown.contains(e.target) && e.target.id !== 'notifBell' && !e.target.closest('#notifBell')) {
+                        dropdown.remove();
+                        document.removeEventListener('click', closeNotif);
+                    }
+                });
+            }, 100);
+        } catch (e) { this.toast('Error loading notifications', 'error'); }
+    },
+
+    async handleNotifClick(notifId, targetPath) {
+        await this.apiFetch('api.php', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ action: 'markNotifRead', id: notifId })
+        });
+        this.updateNotifBadge();
+        const dropdown = document.getElementById('notifDropdown');
+        if (dropdown) dropdown.remove();
+        if (targetPath) {
+            const parts = targetPath.split('/');
+            const fileName = parts.pop();
+            const folderPath = parts.join('/');
+            // Navigate to the folder, then auto-preview the file
+            await this.loadFiles(folderPath);
+            // Find the file in loaded files and preview it
+            const targetFile = this.files.find(f => f.name === fileName);
+            if (targetFile) {
+                this.previewFile(targetFile);
+            }
+        }
+    },
+
+    async markAllNotifsRead() {
+        try {
+            await this.apiFetch('api.php', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ action: 'markAllNotifsRead' })
+            });
+            this.updateNotifBadge();
+            const dropdown = document.getElementById('notifDropdown');
+            if (dropdown) dropdown.remove();
+            this.toast('All notifications marked as read', 'success');
+        } catch (e) { this.toast('Error', 'error'); }
+    },
+
+    async showActivityPanel() {
+        if (!this.isAdmin()) { this.toast('Admin access required', 'error'); return; }
+        try {
+            const res = await this.apiFetch('api.php?action=getActivityLog&limit=100');
+            const data = await res.json();
+            if (!data.success) { this.toast('Failed to load activity log', 'error'); return; }
+            this._renderActivityPanel(data.logs || []);
+        } catch (e) { this.toast('Error: ' + e.message, 'error'); }
+    },
+
+    _renderActivityPanel(logs) {
+        const existing = document.getElementById('activityPanelOverlay');
+        if (existing) existing.remove();
+
+        const overlay = document.createElement('div');
+        overlay.id = 'activityPanelOverlay';
+        overlay.className = 'um-overlay';
+
+        const actionTypes = ['upload', 'delete', 'rename', 'create_folder', 'save_file', 'login', 'logout', 'user_created', 'user_updated', 'user_deleted', 'password_changed', 'review_added', 'review_deleted', 'trash_restore', 'trash_purge', 'share_created'];
+
+        let rowsHtml = '';
+        logs.forEach(log => {
+            const details = typeof log.details === 'string' ? JSON.parse(log.details || '{}') : (log.details || {});
+            let detailStr = '';
+            if (details.new_path) detailStr = '→ ' + details.new_path;
+            else if (details.target_user) detailStr = details.target_user;
+            else if (details.file_name) detailStr = details.file_name;
+
+            rowsHtml += `<tr>
+                <td>${this.formatDate(log.created_at)}</td>
+                <td>${this.escHtml(log.display_name)}</td>
+                <td><span class="action-badge ${log.action_type}">${this._formatActionType(log.action_type)}</span></td>
+                <td class="activity-path" title="${this.escAttr(log.target_path || '')}">${this.escHtml(log.target_path || '-')}</td>
+                <td style="font-size:11px;color:var(--text-muted);">${this.escHtml(detailStr)}</td>
+            </tr>`;
+        });
+
+        overlay.innerHTML = `
+            <div class="users-panel" style="width:900px;max-width:95%;">
+                <div class="users-panel-header">
+                    <h2>${this.icons.activity} Activity Log</h2>
+                    <button class="btn btn-sm btn-ghost" onclick="document.getElementById('activityPanelOverlay').remove()">${this.icons.close}</button>
+                </div>
+                <div class="users-panel-body">
+                    <div class="activity-filters">
+                        <div>
+                            <label>User</label>
+                            <input type="text" id="actFilterUser" placeholder="Username..." style="width:120px;">
+                        </div>
+                        <div>
+                            <label>Action</label>
+                            <select id="actFilterAction" style="width:140px;">
+                                <option value="">All</option>
+                                ${actionTypes.map(t => `<option value="${t}">${t.replace(/_/g, ' ')}</option>`).join('')}
+                            </select>
+                        </div>
+                        <div>
+                            <label>From</label>
+                            <input type="date" id="actFilterFrom" style="width:140px;">
+                        </div>
+                        <div>
+                            <label>To</label>
+                            <input type="date" id="actFilterTo" style="width:140px;">
+                        </div>
+                        <button class="btn btn-sm btn-primary" onclick="App._applyActivityFilters()" style="align-self:flex-end;">Filter</button>
+                    </div>
+                    <div style="overflow-x:auto;">
+                        <table class="activity-table">
+                            <thead><tr>
+                                <th>Time</th><th>User</th><th>Action</th><th>Path</th><th>Details</th>
+                            </tr></thead>
+                            <tbody id="activityTableBody">${rowsHtml}</tbody>
+                        </table>
+                    </div>
+                    ${logs.length === 0 ? '<div style="padding:40px;text-align:center;color:var(--text-muted);">No activity logs found</div>' : ''}
+                    ${logs.length >= 100 ? '<div class="activity-load-more"><button class="btn btn-sm" onclick="App._loadMoreActivity(' + logs.length + ')">Load more</button></div>' : ''}
+                </div>
+            </div>`;
+
+        document.body.appendChild(overlay);
+        overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
+    },
+
+    _formatActionType(type) {
+        const labels = {
+            upload: '↑ Upload', delete: '✕ Delete', rename: '↔ Rename', create_folder: '+ Folder',
+            save_file: '✎ Save', login: '→ Login', logout: '← Logout', user_created: '+ User',
+            user_updated: '✎ User', user_deleted: '✕ User', password_changed: '⚿ Password',
+            review_added: '💬 Review', review_deleted: '✕ Review', trash_restore: '↩ Restore',
+            trash_purge: '⌫ Purge', share_created: '🔗 Share'
+        };
+        return labels[type] || type;
+    },
+
+    async _applyActivityFilters() {
+        const user = document.getElementById('actFilterUser')?.value.trim() || '';
+        const action = document.getElementById('actFilterAction')?.value || '';
+        const dateFrom = document.getElementById('actFilterFrom')?.value || '';
+        const dateTo = document.getElementById('actFilterTo')?.value || '';
+
+        let url = 'api.php?action=getActivityLog&limit=100';
+        if (user) url += '&user=' + encodeURIComponent(user);
+        if (action) url += '&actionType=' + encodeURIComponent(action);
+        if (dateFrom) url += '&dateFrom=' + encodeURIComponent(dateFrom + 'T00:00:00');
+        if (dateTo) url += '&dateTo=' + encodeURIComponent(dateTo + 'T23:59:59');
+
+        try {
+            const res = await this.apiFetch(url);
+            const data = await res.json();
+            if (data.success) {
+                this._renderActivityPanel(data.logs || []);
+            }
+        } catch (e) { this.toast('Error loading logs', 'error'); }
+    },
+
+    async _loadMoreActivity(offset) {
+        const user = document.getElementById('actFilterUser')?.value.trim() || '';
+        const action = document.getElementById('actFilterAction')?.value || '';
+        let url = `api.php?action=getActivityLog&limit=100&offset=${offset}`;
+        if (user) url += '&user=' + encodeURIComponent(user);
+        if (action) url += '&actionType=' + encodeURIComponent(action);
+
+        try {
+            const res = await this.apiFetch(url);
+            const data = await res.json();
+            if (data.success && data.logs.length > 0) {
+                const tbody = document.getElementById('activityTableBody');
+                if (tbody) {
+                    data.logs.forEach(log => {
+                        const details = typeof log.details === 'string' ? JSON.parse(log.details || '{}') : (log.details || {});
+                        let detailStr = '';
+                        if (details.new_path) detailStr = '→ ' + details.new_path;
+                        else if (details.target_user) detailStr = details.target_user;
+                        else if (details.file_name) detailStr = details.file_name;
+
+                        tbody.innerHTML += `<tr>
+                            <td>${this.formatDate(log.created_at)}</td>
+                            <td>${this.escHtml(log.display_name)}</td>
+                            <td><span class="action-badge ${log.action_type}">${this._formatActionType(log.action_type)}</span></td>
+                            <td class="activity-path" title="${this.escAttr(log.target_path || '')}">${this.escHtml(log.target_path || '-')}</td>
+                            <td style="font-size:11px;color:var(--text-muted);">${this.escHtml(detailStr)}</td>
+                        </tr>`;
+                    });
+                }
+            }
+        } catch (e) { /* silent */ }
+    },
+
+    async showTrashPanel() {
+        if (!this.isAdmin()) { this.toast('Admin access required', 'error'); return; }
+        try {
+            const res = await this.apiFetch('api.php?action=listTrash');
+            const data = await res.json();
+            if (!data.success) { this.toast('Failed to load trash', 'error'); return; }
+            this._renderTrashPanel(data.items || []);
+        } catch (e) { this.toast('Error: ' + e.message, 'error'); }
+    },
+
+    _renderTrashPanel(items) {
+        const existing = document.getElementById('trashPanelOverlay');
+        if (existing) existing.remove();
+
+        const overlay = document.createElement('div');
+        overlay.id = 'trashPanelOverlay';
+        overlay.className = 'um-overlay';
+
+        let rowsHtml = '';
+        items.forEach(item => {
+            rowsHtml += `<tr>
+                <td>
+                    <div style="font-weight:500;">${this.escHtml(item.file_name)}</div>
+                    <div class="trash-meta">${this.escHtml(item.original_path)}</div>
+                </td>
+                <td>${this.formatSize(item.file_size)}</td>
+                <td>${this.escHtml(item.deleted_by_display)}</td>
+                <td>${this.formatDate(item.deleted_at)}</td>
+                <td>
+                    <div class="trash-actions">
+                        <button class="btn btn-sm btn-ghost btn-restore" onclick="App.restoreTrashItem('${this.escAttr(item.id)}')" title="Restore">${this.icons.restore} Restore</button>
+                        <button class="btn btn-sm btn-ghost" style="color:var(--danger);" onclick="App.permanentDeleteTrashItem('${this.escAttr(item.id)}')" title="Delete Permanently">${this.icons.trash}</button>
+                    </div>
+                </td>
+            </tr>`;
+        });
+
+        overlay.innerHTML = `
+            <div class="users-panel" style="width:800px;max-width:95%;">
+                <div class="users-panel-header">
+                    <h2>${this.icons.trash} Trash</h2>
+                    <div style="display:flex;gap:8px;">
+                        ${items.length > 0 ? `<button class="btn btn-sm" style="color:var(--danger);border-color:var(--danger);" onclick="App.emptyTrashAll()">Empty Trash</button>` : ''}
+                        ${items.length > 0 ? `<button class="btn btn-sm" onclick="App.purgeExpiredTrash()">Purge Expired</button>` : ''}
+                        <button class="btn btn-sm btn-ghost" onclick="document.getElementById('trashPanelOverlay').remove()">${this.icons.close}</button>
+                    </div>
+                </div>
+                <div class="users-panel-body">
+                    ${items.length > 0 ? `<div style="overflow-x:auto;">
+                        <table class="users-table">
+                            <thead><tr>
+                                <th>File</th><th>Size</th><th>Deleted By</th><th>Deleted At</th><th style="text-align:right">Actions</th>
+                            </tr></thead>
+                            <tbody>${rowsHtml}</tbody>
+                        </table>
+                    </div>` : '<div style="padding:40px;text-align:center;color:var(--text-muted);">Trash is empty</div>'}
+                    <div style="padding:8px 0;font-size:11px;color:var(--text-muted);">Items are automatically purged after 30 days.</div>
+                </div>
+            </div>`;
+
+        document.body.appendChild(overlay);
+        overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
+    },
+
+    async restoreTrashItem(id) {
+        try {
+            const res = await this.apiFetch('api.php', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ action: 'restoreTrash', id })
+            });
+            const data = await res.json();
+            if (data.success) {
+                this.toast('File restored', 'success');
+                this.showTrashPanel();
+                this.loadFiles();
+            } else {
+                this.toast('Restore failed: ' + (data.error || ''), 'error');
+            }
+        } catch (e) { this.toast('Error: ' + e.message, 'error'); }
+    },
+
+    async permanentDeleteTrashItem(id) {
+        if (!confirm('Permanently delete this file? This cannot be undone.')) return;
+        try {
+            const res = await this.apiFetch('api.php', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ action: 'permanentDelete', id })
+            });
+            const data = await res.json();
+            if (data.success) {
+                this.toast('Permanently deleted', 'success');
+                this.showTrashPanel();
+            } else {
+                this.toast('Delete failed: ' + (data.error || ''), 'error');
+            }
+        } catch (e) { this.toast('Error: ' + e.message, 'error'); }
+    },
+
+    async emptyTrashAll() {
+        if (!confirm('Permanently delete ALL trash items? This cannot be undone.')) return;
+        try {
+            const res = await this.apiFetch('api.php', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ action: 'emptyTrash' })
+            });
+            const data = await res.json();
+            if (data.success) {
+                this.toast(`Trash emptied (${data.deleted} items)`, 'success');
+                this.showTrashPanel();
+            } else {
+                this.toast('Failed: ' + (data.error || ''), 'error');
+            }
+        } catch (e) { this.toast('Error: ' + e.message, 'error'); }
+    },
+
+    async purgeExpiredTrash() {
+        try {
+            const res = await this.apiFetch('api.php', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ action: 'purgeExpired' })
+            });
+            const data = await res.json();
+            if (data.success) {
+                this.toast(`Purged ${data.purged} expired items`, 'success');
+                this.showTrashPanel();
+            } else {
+                this.toast('Failed: ' + (data.error || ''), 'error');
+            }
+        } catch (e) { this.toast('Error: ' + e.message, 'error'); }
+    },
+
+    showDeepSearchModal() {
+        const existing = document.getElementById('deepSearchOverlay');
+        if (existing) { existing.remove(); return; }
+
+        const overlay = document.createElement('div');
+        overlay.id = 'deepSearchOverlay';
+        overlay.className = 'um-overlay';
+
+        overlay.innerHTML = `
+            <div class="deep-search-panel">
+                <div class="deep-search-input-wrap">
+                    ${this.icons.search}
+                    <input type="text" class="deep-search-input" id="deepSearchInput" placeholder="Search all files and folders..." autofocus>
+                    <button class="btn btn-sm btn-ghost" onclick="document.getElementById('deepSearchOverlay').remove()">${this.icons.close}</button>
+                </div>
+                <div class="deep-search-results" id="deepSearchResults">
+                    <div class="deep-search-status">Type at least 2 characters to search across all folders</div>
+                </div>
+            </div>`;
+
+        document.body.appendChild(overlay);
+        overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
+
+        const input = document.getElementById('deepSearchInput');
+        input.focus();
+
+        let debounceTimer;
+        input.addEventListener('input', () => {
+            clearTimeout(debounceTimer);
+            debounceTimer = setTimeout(() => this._performDeepSearch(input.value.trim()), 300);
+        });
+
+        input.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape') overlay.remove();
+        });
+    },
+
+    async _performDeepSearch(query) {
+        const resultsEl = document.getElementById('deepSearchResults');
+        if (!resultsEl) return;
+
+        if (query.length < 2) {
+            resultsEl.innerHTML = '<div class="deep-search-status">Type at least 2 characters to search</div>';
+            return;
+        }
+
+        if (this._deepSearchAbort) this._deepSearchAbort.abort();
+        this._deepSearchAbort = new AbortController();
+
+        resultsEl.innerHTML = '<div class="deep-search-loading"><div class="spinner"></div></div>';
+
+        try {
+            const res = await this.apiFetch(`api.php?action=deepSearch&query=${encodeURIComponent(query)}`, {
+                signal: this._deepSearchAbort.signal
+            });
+            const data = await res.json();
+
+            if (!data.success) {
+                resultsEl.innerHTML = `<div class="deep-search-status">${this.escHtml(data.error || 'Search failed')}</div>`;
+                return;
+            }
+
+            if (data.results.length === 0) {
+                resultsEl.innerHTML = '<div class="deep-search-empty">No files found matching your search</div>';
+                return;
+            }
+
+            let html = `<div class="deep-search-status">${data.results.length}${data.total > 200 ? '+' : ''} results found</div>`;
+            data.results.forEach(f => {
+                const iconInfo = this.getFileIcon(f.name, f.mimetype);
+                const dir = f.path.substring(0, f.path.lastIndexOf('/')) || '/';
+                html += `<div class="deep-search-item" onclick="App._navigateToSearchResult(${this.escAttr(JSON.stringify(f))})">
+                    <div class="file-icon ${iconInfo.class}" style="width:28px;height:28px;">${iconInfo.icon}</div>
+                    <div class="deep-search-item-info">
+                        <div class="deep-search-item-name">${this.escHtml(f.name)}</div>
+                        <div class="deep-search-item-path">${this.escHtml(dir)}</div>
+                    </div>
+                    <div class="deep-search-item-meta">${this.formatSize(f.size)}</div>
+                </div>`;
+            });
+            resultsEl.innerHTML = html;
+        } catch (e) {
+            if (e.name === 'AbortError') return;
+            resultsEl.innerHTML = '<div class="deep-search-status">Search error</div>';
+        }
+    },
+
+    _navigateToSearchResult(file) {
+        document.getElementById('deepSearchOverlay')?.remove();
+        const dir = file.path.substring(0, file.path.lastIndexOf('/')) || '';
+        this.loadFiles(dir).then(() => {
+            setTimeout(() => this.previewFile(file), 300);
+        });
+    },
+
+    async showShareModal(filePath, fileName) {
+        const existing = document.getElementById('sharePanelOverlay');
+        if (existing) existing.remove();
+
+        const overlay = document.createElement('div');
+        overlay.id = 'sharePanelOverlay';
+        overlay.className = 'um-overlay z-high';
+
+        overlay.innerHTML = `
+            <div class="users-panel" style="width:500px;">
+                <div class="users-panel-header">
+                    <h2>${this.icons.share} Share Link</h2>
+                    <button class="btn btn-sm btn-ghost" onclick="document.getElementById('sharePanelOverlay').remove()">${this.icons.close}</button>
+                </div>
+                <div class="users-panel-body">
+                    <p style="font-size:13px;color:var(--text-muted);margin:0 0 12px;">Generate a temporary download link for <strong>${this.escHtml(fileName)}</strong></p>
+                    <div class="share-config">
+                        <div>
+                            <label>Expires in</label>
+                            <select id="shareExpiry">
+                                <option value="1">1 hour</option>
+                                <option value="6">6 hours</option>
+                                <option value="24" selected>24 hours</option>
+                                <option value="168">7 days</option>
+                                <option value="720">30 days</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label>Max downloads (0 = unlimited)</label>
+                            <input type="number" id="shareMaxAccess" value="0" min="0" max="1000" style="width:100px;">
+                        </div>
+                        <button class="btn btn-sm btn-primary" onclick="App.generateShareLink('${this.escAttr(filePath)}', '${this.escAttr(fileName)}')">Generate Link</button>
+                    </div>
+                    <div id="shareResult"></div>
+                    <div id="shareExistingLinks"><div style="padding:12px 0;text-align:center;"><div class="spinner" style="width:20px;height:20px;"></div></div></div>
+                </div>
+            </div>`;
+
+        document.body.appendChild(overlay);
+        overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
+
+        this.loadFileShareLinks(filePath);
+    },
+
+    async generateShareLink(path, fileName) {
+        const expiry = parseInt(document.getElementById('shareExpiry')?.value || '24');
+        const maxAccess = parseInt(document.getElementById('shareMaxAccess')?.value || '0');
+        const resultEl = document.getElementById('shareResult');
+        if (!resultEl) return;
+
+        try {
+            const res = await this.apiFetch('api.php', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ action: 'createShareLink', path, fileName, expiresInHours: expiry, maxAccess })
+            });
+            const data = await res.json();
+            if (data.success) {
+                const baseUrl = window.location.origin + window.location.pathname.replace(/\/[^\/]*$/, '/');
+                const shareUrl = baseUrl + 'api.php?action=shareAccess&token=' + data.token;
+                resultEl.innerHTML = `
+                    <div class="share-link-result">
+                        <div class="share-link-url" title="${this.escAttr(shareUrl)}">${this.escHtml(shareUrl)}</div>
+                        <button class="btn btn-sm btn-primary" onclick="App.copyShareUrl('${this.escAttr(shareUrl)}')">Copy</button>
+                    </div>`;
+                this.toast('Share link created', 'success');
+                this.loadFileShareLinks(path);
+            } else {
+                this.toast('Failed: ' + (data.error || ''), 'error');
+            }
+        } catch (e) { this.toast('Error: ' + e.message, 'error'); }
+    },
+
+    copyShareUrl(url) {
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+            navigator.clipboard.writeText(url).then(() => this.toast('Link copied', 'success')).catch(() => this.fallbackCopy(url));
+        } else {
+            this.fallbackCopy(url);
+        }
+    },
+
+    async loadFileShareLinks(path) {
+        const container = document.getElementById('shareExistingLinks');
+        if (!container) return;
+
+        try {
+            const res = await this.apiFetch(`api.php?action=getShareLinks&path=${encodeURIComponent(path)}`);
+            const data = await res.json();
+            if (!data.success || !data.links || data.links.length === 0) {
+                container.innerHTML = '';
+                return;
+            }
+
+            const baseUrl = window.location.origin + window.location.pathname.replace(/\/[^\/]*$/, '/');
+            let html = '<div class="share-existing-title">Active Share Links</div>';
+            data.links.forEach(link => {
+                const expired = new Date(link.expires_at) < new Date();
+                const url = baseUrl + 'api.php?action=shareAccess&token=' + link.token;
+                html += `<div class="share-link-item ${expired ? 'share-link-expired' : ''}">
+                    <div class="share-link-info">
+                        <div style="font-size:12px;font-family:var(--font-mono);color:var(--accent);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;cursor:pointer;" onclick="App.copyShareUrl('${this.escAttr(url)}')" title="Click to copy">${this.escHtml(url.slice(-30))}</div>
+                        <div style="display:flex;gap:8px;">
+                            <span class="share-link-expires">${expired ? 'Expired' : 'Expires: ' + this.formatDate(link.expires_at)}</span>
+                            <span class="share-link-count">Downloads: ${link.access_count}${link.max_access > 0 ? '/' + link.max_access : ''}</span>
+                        </div>
+                    </div>
+                    <button class="btn btn-sm btn-ghost" style="color:var(--danger);" onclick="App.deactivateShareLink('${this.escAttr(link.id)}', '${this.escAttr(path)}')" title="Deactivate">${this.icons.close}</button>
+                </div>`;
+            });
+            container.innerHTML = html;
+        } catch (e) { container.innerHTML = ''; }
+    },
+
+    async deactivateShareLink(id, path) {
+        if (!confirm('Deactivate this share link?')) return;
+        try {
+            const res = await this.apiFetch('api.php', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ action: 'deactivateShareLink', id })
+            });
+            const data = await res.json();
+            if (data.success) {
+                this.toast('Share link deactivated', 'success');
+                this.loadFileShareLinks(path);
+            } else {
+                this.toast('Failed: ' + (data.error || ''), 'error');
+            }
+        } catch (e) { this.toast('Error: ' + e.message, 'error'); }
     },
 
     // === Helpers ===
