@@ -232,6 +232,63 @@ function isAdmin(): bool {
     return ($_SESSION['role'] ?? '') === 'admin';
 }
 
+/**
+ * Get effective permissions for a specific path, considering per-folder overrides.
+ * Checks per_folder_perms first (exact match then parent match), falls back to global.
+ */
+function getEffectivePermissions(string $path): array {
+    if (isAdmin()) {
+        return ['can_upload'=>true,'can_edit'=>true,'can_delete'=>true,'can_download'=>true,'can_create_folder'=>true,'can_review'=>true];
+    }
+    $permissions = $_SESSION['permissions'] ?? [];
+    $perFolderPerms = $permissions['per_folder_perms'] ?? [];
+
+    if (!empty($perFolderPerms) && is_array($perFolderPerms)) {
+        $pathNorm = rtrim($path, '/');
+        // Find the most specific matching folder (longest prefix)
+        $bestMatch = null;
+        $bestLen = -1;
+        foreach ($perFolderPerms as $folderPath => $folderPerms) {
+            $folderNorm = rtrim($folderPath, '/');
+            if ($pathNorm === $folderNorm || ($pathNorm !== '' && strpos($pathNorm . '/', $folderNorm . '/') === 0)) {
+                if (strlen($folderNorm) > $bestLen) {
+                    $bestMatch = $folderPerms;
+                    $bestLen = strlen($folderNorm);
+                }
+            }
+        }
+        if ($bestMatch !== null && is_array($bestMatch)) {
+            return [
+                'can_upload' => !empty($bestMatch['can_upload']),
+                'can_edit' => !empty($bestMatch['can_edit']),
+                'can_delete' => !empty($bestMatch['can_delete']),
+                'can_download' => !empty($bestMatch['can_download']),
+                'can_create_folder' => !empty($bestMatch['can_create_folder']),
+                'can_review' => !empty($bestMatch['can_review']),
+            ];
+        }
+    }
+
+    // Fall back to global permissions
+    return [
+        'can_upload' => !empty($permissions['can_upload']),
+        'can_edit' => !empty($permissions['can_edit']),
+        'can_delete' => !empty($permissions['can_delete']),
+        'can_download' => !empty($permissions['can_download']),
+        'can_create_folder' => !empty($permissions['can_create_folder']),
+        'can_review' => !empty($permissions['can_review']),
+    ];
+}
+
+/**
+ * Check a specific permission for a given path (per-folder aware).
+ */
+function hasPathPermission(string $perm, string $path): bool {
+    if (isAdmin()) return true;
+    $effective = getEffectivePermissions($path);
+    return !empty($effective[$perm]);
+}
+
 function isPathDirectlyAllowed(string $path): bool {
     $permissions = $_SESSION['permissions'] ?? [];
     $allowed = $permissions['allowed_paths'] ?? [];
