@@ -3326,3 +3326,463 @@ textarea::placeholder {
 .upload-progress.active {
     animation: modalPopIn 0.3s ease forwards;
 }
+
+/* ============================================
+   Enhanced User Management: Tree Folder Picker
+   ============================================ */
+
+.folder-tree-toggle {
+    width: 16px;
+    height: 16px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    color: var(--text-muted);
+    transition: transform 0.2s ease, color 0.2s ease;
+    flex-shrink: 0;
+    border: none;
+    background: none;
+    padding: 0;
+    font-size: 10px;
+    line-height: 1;
+}
+
+.folder-tree-toggle:hover {
+    color: var(--accent);
+}
+
+.folder-tree-toggle.expanded {
+    transform: rotate(90deg);
+}
+
+.folder-tree-toggle.placeholder {
+    visibility: hidden;
+}
+
+.folder-picker-item .tree-loading {
+    width: 12px;
+    height: 12px;
+    border: 2px solid var(--border-color);
+    border-top-color: var(--accent);
+    border-radius: 50%;
+    animation: spin 0.6s linear infinite;
+    flex-shrink: 0;
+}
+
+/* ============================================
+   Enhanced User Management: Per-Folder Permissions
+   ============================================ */
+
+.folder-perm-toggle {
+    font-size: 10px;
+    color: var(--text-muted);
+    cursor: pointer;
+    padding: 2px 6px;
+    border-radius: 4px;
+    background: none;
+    border: none;
+    transition: var(--transition);
+    margin-left: auto;
+    flex-shrink: 0;
+}
+
+.folder-perm-toggle:hover {
+    color: var(--accent);
+    background: var(--accent-bg);
+}
+
+.folder-perm-toggle.active {
+    color: var(--accent);
+}
+
+.folder-perm-override {
+    padding: 8px 10px;
+    border-bottom: 1px solid rgba(255,255,255,0.03);
+    animation: folderPermSlide 0.2s ease;
+}
+
+@keyframes folderPermSlide {
+    from { opacity: 0; transform: translateY(-4px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+
+.folder-perm-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 4px;
+}
+
+.folder-perm-grid .perm-checkbox {
+    padding: 4px 6px;
+    font-size: 10px;
+    gap: 5px;
+}
+
+.folder-perm-grid .perm-checkbox .perm-icon {
+    width: 14px;
+    height: 14px;
+}
+
+.folder-perm-grid .perm-checkbox .perm-icon svg {
+    width: 9px;
+    height: 9px;
+}
+
+.folder-perm-label {
+    font-size: 10px;
+    color: var(--text-muted);
+    margin-bottom: 4px;
+    font-style: italic;
+}
+
+/* ============================================
+   Enhanced User Management: Team Selector
+   ============================================ */
+
+.team-selector {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    padding: 8px;
+    background: rgba(255, 255, 255, 0.015);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius);
+    min-height: 40px;
+}
+
+.team-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 5px 10px;
+    border-radius: 20px;
+    font-size: 12px;
+    cursor: pointer;
+    border: 1px solid var(--border-color);
+    background: rgba(255, 255, 255, 0.02);
+    color: var(--text-secondary);
+    transition: all var(--transition);
+    user-select: none;
+}
+
+.team-chip:hover {
+    border-color: var(--accent-border);
+    background: var(--accent-bg);
+}
+
+.team-chip.selected {
+    background: var(--accent-bg);
+    border-color: var(--accent);
+    color: var(--accent);
+    font-weight: 500;
+}
+
+.team-chip .team-chip-icon {
+    width: 14px;
+    height: 14px;
+}
+
+.team-selector-empty {
+    width: 100%;
+    text-align: center;
+    padding: 8px;
+    color: var(--text-muted);
+    font-size: 12px;
+}
+
+/* ============================================
+   Enhanced User Management: User Summary
+   ============================================ */
+
+.user-summary {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    padding: 4px 0;
+}
+
+.summary-section {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.summary-section-title {
+    font-size: 10px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--text-muted);
+}
+
+.summary-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 6px 10px;
+    background: rgba(255, 255, 255, 0.02);
+    border-radius: var(--radius);
+    border: 1px solid rgba(255,255,255,0.04);
+}
+
+.summary-row-label {
+    font-size: 11px;
+    color: var(--text-muted);
+    min-width: 100px;
+    flex-shrink: 0;
+}
+
+.summary-row-value {
+    font-size: 12px;
+    color: var(--text-primary);
+    font-weight: 500;
+}
+
+.summary-perms-grid {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+}
+
+.summary-perm-tag {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 3px 8px;
+    border-radius: 4px;
+    font-size: 11px;
+    border: 1px solid var(--border-color);
+    color: var(--text-muted);
+    background: rgba(255,255,255,0.02);
+}
+
+.summary-perm-tag.active {
+    border-color: var(--success);
+    color: var(--success);
+    background: rgba(16, 185, 129, 0.08);
+}
+
+.summary-folder-list {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.summary-folder-item {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 8px;
+    font-size: 12px;
+    color: var(--text-secondary);
+    border-radius: 4px;
+    background: rgba(255,255,255,0.015);
+}
+
+.summary-folder-item svg {
+    width: 14px;
+    height: 14px;
+    color: var(--warning);
+    flex-shrink: 0;
+}
+
+.summary-folder-perms {
+    margin-left: auto;
+    font-size: 10px;
+    color: var(--text-muted);
+}
+
+.summary-teams-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+}
+
+.summary-actions {
+    display: flex;
+    gap: 8px;
+    justify-content: flex-end;
+    padding-top: 12px;
+    border-top: 1px solid var(--border-color);
+}
+
+/* ============================================
+   Enhanced User Management: Permission Templates
+   ============================================ */
+
+.template-selector {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    padding: 8px;
+    background: rgba(255, 255, 255, 0.015);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius);
+}
+
+.template-card {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 12px;
+    border-radius: 8px;
+    font-size: 12px;
+    cursor: pointer;
+    border: 1px solid var(--border-color);
+    background: rgba(255, 255, 255, 0.02);
+    color: var(--text-secondary);
+    transition: all var(--transition);
+    user-select: none;
+    position: relative;
+}
+
+.template-card:hover {
+    border-color: var(--accent-border);
+    background: var(--accent-bg);
+}
+
+.template-card.active {
+    border-color: var(--accent);
+    background: var(--accent-bg);
+    color: var(--accent);
+}
+
+.template-card.builtin {
+    border-style: dashed;
+}
+
+.template-card .template-delete {
+    width: 14px;
+    height: 14px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 50%;
+    background: rgba(239, 68, 68, 0.1);
+    color: var(--danger);
+    cursor: pointer;
+    opacity: 0;
+    transition: var(--transition);
+    margin-left: 2px;
+    border: none;
+    padding: 0;
+    font-size: 10px;
+}
+
+.template-card:hover .template-delete {
+    opacity: 1;
+}
+
+.template-card .template-delete:hover {
+    background: rgba(239, 68, 68, 0.2);
+}
+
+.template-save-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 6px 12px;
+    border-radius: 8px;
+    font-size: 11px;
+    cursor: pointer;
+    border: 1px dashed var(--border-light);
+    background: none;
+    color: var(--text-muted);
+    transition: var(--transition);
+}
+
+.template-save-btn:hover {
+    border-color: var(--accent);
+    color: var(--accent);
+    background: var(--accent-bg);
+}
+
+/* ============================================
+   Enhanced User Management: Copy From User
+   ============================================ */
+
+.copy-user-dropdown {
+    position: absolute;
+    top: 100%;
+    left: 0;
+    right: 0;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius);
+    max-height: 200px;
+    overflow-y: auto;
+    z-index: 10;
+    box-shadow: 0 8px 24px rgba(0,0,0,0.4);
+    animation: folderPermSlide 0.15s ease;
+}
+
+.copy-user-dropdown::-webkit-scrollbar { width: 5px; }
+.copy-user-dropdown::-webkit-scrollbar-track { background: transparent; }
+.copy-user-dropdown::-webkit-scrollbar-thumb { background: var(--border-light); border-radius: 3px; }
+
+.copy-user-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 12px;
+    cursor: pointer;
+    font-size: 12px;
+    color: var(--text-secondary);
+    transition: var(--transition);
+    border-bottom: 1px solid rgba(255,255,255,0.03);
+}
+
+.copy-user-item:last-child {
+    border-bottom: none;
+}
+
+.copy-user-item:hover {
+    background: var(--accent-bg);
+    color: var(--text-primary);
+}
+
+.copy-user-item .copy-user-name {
+    flex: 1;
+}
+
+.copy-user-item .copy-user-role {
+    font-size: 10px;
+    padding: 2px 6px;
+    border-radius: 4px;
+    font-weight: 500;
+}
+
+.copy-user-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 6px 12px;
+    border-radius: 8px;
+    font-size: 11px;
+    cursor: pointer;
+    border: 1px dashed var(--border-light);
+    background: none;
+    color: var(--text-muted);
+    transition: var(--transition);
+    position: relative;
+}
+
+.copy-user-btn:hover {
+    border-color: var(--accent);
+    color: var(--accent);
+    background: var(--accent-bg);
+}
+
+/* Quick setup row */
+.quick-setup-row {
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap;
+    align-items: center;
+}
+
+.quick-setup-row > .template-selector {
+    flex: 1;
+    min-width: 0;
+}
