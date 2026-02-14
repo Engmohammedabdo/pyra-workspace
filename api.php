@@ -88,6 +88,58 @@ function supabaseRequest(string $method, string $endpoint, ?array $body = null, 
     return ['data' => json_decode($response, true), 'httpCode' => $httpCode, 'raw' => $response];
 }
 
+function storageRequest(string $method, string $filePath, $body = null, array $options = []): array {
+    $encodedPath = implode('/', array_map('rawurlencode', explode('/', $filePath)));
+    $url = SUPABASE_URL . '/storage/v1/object/' . SUPABASE_BUCKET . '/' . $encodedPath;
+
+    $ch = curl_init();
+    curl_setopt($ch, CURLOPT_URL, $url);
+    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+    curl_setopt($ch, CURLOPT_TIMEOUT, $options['timeout'] ?? 120);
+
+    $headers = ['Authorization: Bearer ' . SUPABASE_SERVICE_KEY];
+    if (isset($options['contentType'])) {
+        $headers[] = 'Content-Type: ' . $options['contentType'];
+    }
+    if (!empty($options['extraHeaders'])) {
+        $headers = array_merge($headers, $options['extraHeaders']);
+    }
+
+    switch (strtoupper($method)) {
+        case 'POST':
+            curl_setopt($ch, CURLOPT_POST, true);
+            if ($body !== null) {
+                curl_setopt($ch, CURLOPT_POSTFIELDS, $body);
+            }
+            break;
+        case 'PUT':
+            curl_setopt($ch, CURLOPT_CUSTOMREQUEST, 'PUT');
+            if ($body !== null) {
+                curl_setopt($ch, CURLOPT_POSTFIELDS, $body);
+            }
+            break;
+        case 'DELETE':
+            curl_setopt($ch, CURLOPT_CUSTOMREQUEST, 'DELETE');
+            break;
+    }
+
+    curl_setopt($ch, CURLOPT_HTTPHEADER, $headers);
+
+    $response = curl_exec($ch);
+    $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    $contentType = curl_getinfo($ch, CURLINFO_CONTENT_TYPE);
+    $error = curl_error($ch);
+    curl_close($ch);
+
+    return [
+        'success' => ($httpCode >= 200 && $httpCode < 300),
+        'data'    => $response,
+        'httpCode' => $httpCode,
+        'contentType' => $contentType,
+        'error'  => $error ?: null,
+    ];
+}
+
 function listFiles(string $prefix = ''): array {
     $body = [
         'prefix' => $prefix,
@@ -132,21 +184,10 @@ function listFiles(string $prefix = ''): array {
 
 function createFileVersion(string $filePath): bool {
     // Check if file exists in storage
-    $encodedPath = implode('/', array_map('rawurlencode', explode('/', $filePath)));
-    $checkUrl = SUPABASE_URL . '/storage/v1/object/' . SUPABASE_BUCKET . '/' . $encodedPath;
-
-    $ch = curl_init();
-    curl_setopt($ch, CURLOPT_URL, $checkUrl);
-    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-    curl_setopt($ch, CURLOPT_NOBODY, false);
-    curl_setopt($ch, CURLOPT_HTTPHEADER, [
-        'Authorization: Bearer ' . SUPABASE_SERVICE_KEY,
-    ]);
-    curl_setopt($ch, CURLOPT_TIMEOUT, 60);
-    $fileContent = curl_exec($ch);
-    $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-    $contentType = curl_getinfo($ch, CURLINFO_CONTENT_TYPE);
-    curl_close($ch);
+    $result = storageRequest('GET', $filePath, null, ['timeout' => 60]);
+    $fileContent = $result['data'];
+    $httpCode = $result['httpCode'];
+    $contentType = $result['contentType'];
 
     if ($httpCode !== 200 || empty($fileContent)) return false;
 
@@ -159,15 +200,7 @@ function createFileVersion(string $filePath): bool {
         $oldest = end($existingVersions);
         if ($oldest) {
             // Delete from storage
-            $oldEncodedPath = implode('/', array_map('rawurlencode', explode('/', $oldest['version_path'])));
-            $delUrl = SUPABASE_URL . '/storage/v1/object/' . SUPABASE_BUCKET . '/' . $oldEncodedPath;
-            $ch = curl_init();
-            curl_setopt($ch, CURLOPT_URL, $delUrl);
-            curl_setopt($ch, CURLOPT_CUSTOMREQUEST, 'DELETE');
-            curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-            curl_setopt($ch, CURLOPT_HTTPHEADER, ['Authorization: Bearer ' . SUPABASE_SERVICE_KEY]);
-            curl_exec($ch);
-            curl_close($ch);
+            storageRequest('DELETE', $oldest['version_path']);
             deleteFileVersionRecord($oldest['id']);
         }
     }
@@ -177,23 +210,11 @@ function createFileVersion(string $filePath): bool {
     $fileName = basename($filePath);
     $versionPath = '.versions/' . $filePath . '/' . $timestamp . '_' . $fileName;
 
-    $versionEncodedPath = implode('/', array_map('rawurlencode', explode('/', $versionPath)));
-    $uploadUrl = SUPABASE_URL . '/storage/v1/object/' . SUPABASE_BUCKET . '/' . $versionEncodedPath;
-
-    $ch = curl_init();
-    curl_setopt($ch, CURLOPT_URL, $uploadUrl);
-    curl_setopt($ch, CURLOPT_POST, true);
-    curl_setopt($ch, CURLOPT_POSTFIELDS, $fileContent);
-    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-    curl_setopt($ch, CURLOPT_TIMEOUT, 120);
-    curl_setopt($ch, CURLOPT_HTTPHEADER, [
-        'Authorization: Bearer ' . SUPABASE_SERVICE_KEY,
-        'Content-Type: ' . ($contentType ?: 'application/octet-stream'),
-        'x-upsert: true'
+    $uploadResult = storageRequest('POST', $versionPath, $fileContent, [
+        'contentType' => $contentType ?: 'application/octet-stream',
+        'extraHeaders' => ['x-upsert: true'],
     ]);
-    $response = curl_exec($ch);
-    $vHttpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-    curl_close($ch);
+    $vHttpCode = $uploadResult['httpCode'];
 
     if ($vHttpCode === 200 || $vHttpCode === 201) {
         $versionNum = getNextVersionNumber($filePath);
@@ -249,26 +270,14 @@ function uploadFile(string $prefix, array $file): array {
 
     $fileContent = file_get_contents($file['tmp_name']);
 
-    $encodedPath = implode('/', array_map('rawurlencode', explode('/', $filePath)));
-    $url = SUPABASE_URL . '/storage/v1/object/' . SUPABASE_BUCKET . '/' . $encodedPath;
-
-    $ch = curl_init();
-    curl_setopt($ch, CURLOPT_URL, $url);
-    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-    curl_setopt($ch, CURLOPT_POST, true);
-    curl_setopt($ch, CURLOPT_POSTFIELDS, $fileContent);
-    curl_setopt($ch, CURLOPT_TIMEOUT, 300);
-    curl_setopt($ch, CURLOPT_HTTPHEADER, [
-        'Authorization: Bearer ' . SUPABASE_SERVICE_KEY,
-        'Content-Type: ' . $mimeType,
-        'x-upsert: true',
-        'Cache-Control: max-age=3600'
+    $result = storageRequest('POST', $filePath, $fileContent, [
+        'timeout' => 300,
+        'contentType' => $mimeType,
+        'extraHeaders' => ['x-upsert: true', 'Cache-Control: max-age=3600'],
     ]);
-
-    $response = curl_exec($ch);
-    $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-    $error = curl_error($ch);
-    curl_close($ch);
+    $httpCode = $result['httpCode'];
+    $error = $result['error'];
+    $response = $result['data'];
 
     if ($error) {
         return ['success' => false, 'error' => $error];
@@ -290,20 +299,9 @@ function uploadFile(string $prefix, array $file): array {
 }
 
 function deleteFile(string $filePath): array {
-    $encodedPath = implode('/', array_map('rawurlencode', explode('/', $filePath)));
-    $url = SUPABASE_URL . '/storage/v1/object/' . SUPABASE_BUCKET . '/' . $encodedPath;
-
-    $ch = curl_init();
-    curl_setopt($ch, CURLOPT_URL, $url);
-    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-    curl_setopt($ch, CURLOPT_CUSTOMREQUEST, 'DELETE');
-    curl_setopt($ch, CURLOPT_HTTPHEADER, [
-        'Authorization: Bearer ' . SUPABASE_SERVICE_KEY
-    ]);
-
-    $response = curl_exec($ch);
-    $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-    curl_close($ch);
+    $result = storageRequest('DELETE', $filePath);
+    $httpCode = $result['httpCode'];
+    $response = $result['data'];
 
     if ($httpCode === 200) {
         removeFileIndex($filePath);
@@ -358,20 +356,10 @@ function renameFile(string $oldPath, string $newPath): array {
 }
 
 function getFileContent(string $filePath): array {
-    $encodedPath = implode('/', array_map('rawurlencode', explode('/', $filePath)));
-    $url = SUPABASE_URL . '/storage/v1/object/' . SUPABASE_BUCKET . '/' . $encodedPath;
-
-    $ch = curl_init();
-    curl_setopt($ch, CURLOPT_URL, $url);
-    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-    curl_setopt($ch, CURLOPT_HTTPHEADER, [
-        'Authorization: Bearer ' . SUPABASE_SERVICE_KEY
-    ]);
-
-    $response = curl_exec($ch);
-    $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-    $contentType = curl_getinfo($ch, CURLINFO_CONTENT_TYPE);
-    curl_close($ch);
+    $result = storageRequest('GET', $filePath);
+    $response = $result['data'];
+    $httpCode = $result['httpCode'];
+    $contentType = $result['contentType'];
 
     if ($httpCode === 200) {
         return ['success' => true, 'content' => $response, 'contentType' => $contentType];
@@ -381,25 +369,12 @@ function getFileContent(string $filePath): array {
 }
 
 function saveFileContent(string $filePath, string $content, string $mimeType = 'text/plain'): array {
-    $encodedPath = implode('/', array_map('rawurlencode', explode('/', $filePath)));
-    $url = SUPABASE_URL . '/storage/v1/object/' . SUPABASE_BUCKET . '/' . $encodedPath;
-
-    $ch = curl_init();
-    curl_setopt($ch, CURLOPT_URL, $url);
-    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-    curl_setopt($ch, CURLOPT_CUSTOMREQUEST, 'PUT');
-    curl_setopt($ch, CURLOPT_POSTFIELDS, $content);
-    curl_setopt($ch, CURLOPT_TIMEOUT, 120);
-    curl_setopt($ch, CURLOPT_HTTPHEADER, [
-        'Authorization: Bearer ' . SUPABASE_SERVICE_KEY,
-        'Content-Type: ' . $mimeType,
-        'x-upsert: true',
-        'Cache-Control: max-age=3600'
+    $result = storageRequest('PUT', $filePath, $content, [
+        'contentType' => $mimeType,
+        'extraHeaders' => ['x-upsert: true', 'Cache-Control: max-age=3600'],
     ]);
-
-    $response = curl_exec($ch);
-    $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-    curl_close($ch);
+    $httpCode = $result['httpCode'];
+    $response = $result['data'];
 
     if ($httpCode === 200 || $httpCode === 201) {
         return ['success' => true];
@@ -411,22 +386,12 @@ function saveFileContent(string $filePath, string $content, string $mimeType = '
 
 function createFolder(string $prefix, string $folderName): array {
     $path = $prefix ? $prefix . '/' . $folderName . '/.keep' : $folderName . '/.keep';
-    $url = SUPABASE_URL . '/storage/v1/object/' . SUPABASE_BUCKET . '/' . $path;
-
-    $ch = curl_init();
-    curl_setopt($ch, CURLOPT_URL, $url);
-    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-    curl_setopt($ch, CURLOPT_POST, true);
-    curl_setopt($ch, CURLOPT_POSTFIELDS, '');
-    curl_setopt($ch, CURLOPT_HTTPHEADER, [
-        'Authorization: Bearer ' . SUPABASE_SERVICE_KEY,
-        'Content-Type: text/plain',
-        'x-upsert: true'
+    $result = storageRequest('POST', $path, '', [
+        'contentType' => 'text/plain',
+        'extraHeaders' => ['x-upsert: true'],
     ]);
-
-    $response = curl_exec($ch);
-    $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-    curl_close($ch);
+    $httpCode = $result['httpCode'];
+    $response = $result['data'];
 
     if ($httpCode === 200 || $httpCode === 201) {
         return ['success' => true];
@@ -1632,15 +1597,9 @@ switch ($action) {
         createFileVersion($originalPath);
 
         // Download version file
-        $vEncodedPath = implode('/', array_map('rawurlencode', explode('/', $versionPath)));
-        $vUrl = SUPABASE_URL . '/storage/v1/object/' . SUPABASE_BUCKET . '/' . $vEncodedPath;
-        $ch = curl_init();
-        curl_setopt($ch, CURLOPT_URL, $vUrl);
-        curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-        curl_setopt($ch, CURLOPT_HTTPHEADER, ['Authorization: Bearer ' . SUPABASE_SERVICE_KEY]);
-        $vContent = curl_exec($ch);
-        $vHttp = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-        curl_close($ch);
+        $dlResult = storageRequest('GET', $versionPath);
+        $vContent = $dlResult['data'];
+        $vHttp = $dlResult['httpCode'];
 
         if ($vHttp !== 200 || empty($vContent)) {
             echo json_encode(['success' => false, 'error' => 'Failed to download version file']);
@@ -1648,21 +1607,11 @@ switch ($action) {
         }
 
         // Upload to original path
-        $oEncodedPath = implode('/', array_map('rawurlencode', explode('/', $originalPath)));
-        $oUrl = SUPABASE_URL . '/storage/v1/object/' . SUPABASE_BUCKET . '/' . $oEncodedPath;
-        $ch = curl_init();
-        curl_setopt($ch, CURLOPT_URL, $oUrl);
-        curl_setopt($ch, CURLOPT_POST, true);
-        curl_setopt($ch, CURLOPT_POSTFIELDS, $vContent);
-        curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-        curl_setopt($ch, CURLOPT_HTTPHEADER, [
-            'Authorization: Bearer ' . SUPABASE_SERVICE_KEY,
-            'Content-Type: ' . ($ver['mime_type'] ?: 'application/octet-stream'),
-            'x-upsert: true'
+        $restoreResult = storageRequest('POST', $originalPath, $vContent, [
+            'contentType' => $ver['mime_type'] ?: 'application/octet-stream',
+            'extraHeaders' => ['x-upsert: true'],
         ]);
-        $response = curl_exec($ch);
-        $rHttp = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-        curl_close($ch);
+        $rHttp = $restoreResult['httpCode'];
 
         if ($rHttp === 200 || $rHttp === 201) {
             logActivity('version_restored', $originalPath, ['version_id' => $versionId, 'version_number' => $ver['version_number']]);
@@ -1691,15 +1640,7 @@ switch ($action) {
         }
         $ver = $verResult['data'][0];
         // Delete version file from storage
-        $vEncodedPath = implode('/', array_map('rawurlencode', explode('/', $ver['version_path'])));
-        $delUrl = SUPABASE_URL . '/storage/v1/object/' . SUPABASE_BUCKET . '/' . $vEncodedPath;
-        $ch = curl_init();
-        curl_setopt($ch, CURLOPT_URL, $delUrl);
-        curl_setopt($ch, CURLOPT_CUSTOMREQUEST, 'DELETE');
-        curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-        curl_setopt($ch, CURLOPT_HTTPHEADER, ['Authorization: Bearer ' . SUPABASE_SERVICE_KEY]);
-        curl_exec($ch);
-        curl_close($ch);
+        storageRequest('DELETE', $ver['version_path']);
         // Delete record
         $delResult = deleteFileVersionRecord($versionId);
         echo json_encode($delResult);

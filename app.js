@@ -4,6 +4,43 @@
  * Auth, permissions, reviews, and user management
  */
 
+/**
+ * ╔══════════════════════════════════════════════════════════════╗
+ * ║                    TABLE OF CONTENTS                        ║
+ * ╠══════════════════════════════════════════════════════════════╣
+ * ║  SECTION                              SEARCH LANDMARK       ║
+ * ╠══════════════════════════════════════════════════════════════╣
+ * ║  Constants & File Types               // STATE &            ║
+ * ║  App State & Properties               // SVG ICONS          ║
+ * ║  SVG Icons                            // INITIALIZATION     ║
+ * ║  Initialization                       // DASHBOARD          ║
+ * ║  Dashboard                            // CORE UI            ║
+ * ║  Core UI (Themes, Views)              // AUTH &             ║
+ * ║  Auth & Permissions                   // NAVIGATION &       ║
+ * ║  Navigation & Events                  // FILE DISPLAY       ║
+ * ║  File Display & Rendering             // PREVIEW &          ║
+ * ║  Preview & Edit                       // UPLOAD &           ║
+ * ║  Upload & Download                    // FILE OPERATIONS    ║
+ * ║  File Operations                      // CONTEXT MENU       ║
+ * ║  Context Menu                         // MODALS             ║
+ * ║  Modals                               // REVIEWS &          ║
+ * ║  Reviews & Version History            // USER MANAGEMENT    ║
+ * ║  User Management                      // TEAM MANAGEMENT    ║
+ * ║  Team Management                      // NOTIFICATIONS      ║
+ * ║  Notifications                        // ACTIVITY LOG       ║
+ * ║  Activity Log                         // TRASH MANAGEMENT   ║
+ * ║  Trash Management                     // DEEP SEARCH        ║
+ * ║  Deep Search                          // FILE SHARING       ║
+ * ║  File Sharing                         // SYSTEM SETTINGS    ║
+ * ║  System Settings                      // UTILITY HELPERS    ║
+ * ║  Utility Helpers                      // MARKDOWN RENDERER  ║
+ * ║  Markdown Renderer                    // BOOTSTRAP          ║
+ * ║  Bootstrap (DOMContentLoaded)                               ║
+ * ╚══════════════════════════════════════════════════════════════╝
+ *
+ * Use Ctrl+F with the SEARCH LANDMARK text to jump to any section.
+ */
+
 const FILE_TYPES = {
     image: ['jpg','jpeg','png','gif','svg','webp','bmp','ico','tiff'],
     video: ['mp4','webm','mov','avi','mkv','flv','wmv'],
@@ -22,6 +59,9 @@ FILE_TYPES.allText = [...FILE_TYPES.editable, ...FILE_TYPES.textExtra];
 const TIME = { MINUTE: 60000, HOUR: 3600000, DAY: 86400000, WEEK: 604800000 };
 
 const App = {
+    // ═══════════════════════════════════════════════════════════════
+    // STATE & PROPERTIES
+    // ═══════════════════════════════════════════════════════════════
     currentPath: '',
     selectedFile: null,
     files: [],
@@ -43,6 +83,9 @@ const App = {
     _currentScreen: 'dashboard',
     _dashboardData: null,
 
+    // ═══════════════════════════════════════════════════════════════
+    // SVG ICONS
+    // ═══════════════════════════════════════════════════════════════
     icons: {
         folder: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>',
         file: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><polyline points="13 2 13 9 20 9"/></svg>',
@@ -85,6 +128,9 @@ const App = {
         plus: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>'
     },
 
+    // ═══════════════════════════════════════════════════════════════
+    // INITIALIZATION
+    // ═══════════════════════════════════════════════════════════════
     init() {
         this.applyTheme();
         this.applyView();
@@ -96,6 +142,9 @@ const App = {
         this.showDashboard();
     },
 
+    // ═══════════════════════════════════════════════════════════════
+    // DASHBOARD
+    // ═══════════════════════════════════════════════════════════════
     async showDashboard() {
         this._currentScreen = 'dashboard';
         const grid = document.getElementById('fileGrid');
@@ -320,6 +369,9 @@ const App = {
         }
     },
 
+    // ═══════════════════════════════════════════════════════════════
+    // CORE UI (THEMES, VIEWS)
+    // ═══════════════════════════════════════════════════════════════
     _debounce(fn, ms) {
         let timer;
         return (...args) => {
@@ -380,7 +432,9 @@ const App = {
         this.applyView();
     },
 
-    // === Auth Helpers ===
+    // ═══════════════════════════════════════════════════════════════
+    // AUTH & PERMISSIONS
+    // ═══════════════════════════════════════════════════════════════
     canDo(permission) {
         if (this.isAdmin()) return true;
         return !!this.permissions[permission];
@@ -448,6 +502,9 @@ const App = {
         });
     },
 
+    // ═══════════════════════════════════════════════════════════════
+    // NAVIGATION & EVENTS
+    // ═══════════════════════════════════════════════════════════════
     bindEvents() {
         document.getElementById('searchInput')?.addEventListener('input',
             this._debounce(() => this.renderFiles(), 200)
@@ -538,6 +595,9 @@ const App = {
         el.innerHTML = html;
     },
 
+    // ═══════════════════════════════════════════════════════════════
+    // FILE DISPLAY & RENDERING
+    // ═══════════════════════════════════════════════════════════════
     renderInfoBar() {
         const el = document.getElementById('infoBar');
         if (!el) return;
@@ -700,7 +760,9 @@ const App = {
         return html;
     },
 
-    // === Preview ===
+    // ═══════════════════════════════════════════════════════════════
+    // PREVIEW & EDIT
+    // ═══════════════════════════════════════════════════════════════
     async previewFile(file) {
         const myId = ++this._previewId;
         this.selectedFile = file;
@@ -917,7 +979,9 @@ const App = {
         this.renderFiles();
     },
 
-    // === Upload ===
+    // ═══════════════════════════════════════════════════════════════
+    // UPLOAD & DOWNLOAD
+    // ═══════════════════════════════════════════════════════════════
     triggerUpload() {
         const input = document.createElement('input');
         input.type = 'file';
@@ -985,6 +1049,9 @@ const App = {
         document.body.removeChild(a);
     },
 
+    // ═══════════════════════════════════════════════════════════════
+    // FILE OPERATIONS (DELETE, RENAME, FOLDER, COPY URL)
+    // ═══════════════════════════════════════════════════════════════
     async deleteFile(path) {
         const filename = path.split('/').pop();
         if (!confirm(`Move "${filename}" to trash?`)) return;
@@ -1169,7 +1236,9 @@ const App = {
         return `${base}/storage/v1/object/public/${bucket}/${path}`;
     },
 
-    // === Context Menu ===
+    // ═══════════════════════════════════════════════════════════════
+    // CONTEXT MENU
+    // ═══════════════════════════════════════════════════════════════
     showContextMenu(e, type, item) {
         e.preventDefault();
         e.stopPropagation();
@@ -1232,7 +1301,9 @@ const App = {
         });
     },
 
-    // === Modal ===
+    // ═══════════════════════════════════════════════════════════════
+    // MODALS
+    // ═══════════════════════════════════════════════════════════════
     showModal(title, defaultValue, callback) {
         const overlay = document.getElementById('modalOverlay');
         document.getElementById('modalTitle').textContent = title;
@@ -1271,7 +1342,9 @@ const App = {
         this.closeModal();
     },
 
-    // === Reviews ===
+    // ═══════════════════════════════════════════════════════════════
+    // REVIEWS & VERSION HISTORY
+    // ═══════════════════════════════════════════════════════════════
     async loadFileReviews(path) {
         try {
             const res = await this.apiFetch(`api.php?action=getReviews&path=${encodeURIComponent(path)}`);
@@ -1596,7 +1669,9 @@ const App = {
         }
     },
 
-    // === User Management (Enhanced) ===
+    // ═══════════════════════════════════════════════════════════════
+    // USER MANAGEMENT
+    // ═══════════════════════════════════════════════════════════════
     _ufFolders: [],
     _ufSelectedPaths: ['*'],
     _folderTreeCache: {},
@@ -2551,8 +2626,9 @@ const App = {
         } catch (e) { this.toast('Error: ' + e.message, 'error'); }
     },
 
-    // === Teams / Groups Management ===
-
+    // ═══════════════════════════════════════════════════════════════
+    // TEAM MANAGEMENT
+    // ═══════════════════════════════════════════════════════════════
     async showTeamsPanel() {
         if (!this.isAdmin()) { this.toast('Admin access required', 'error'); return; }
         try {
@@ -3144,6 +3220,9 @@ const App = {
         } catch (e) { this.toast('Error: ' + e.message, 'error'); }
     },
 
+    // ═══════════════════════════════════════════════════════════════
+    // NOTIFICATIONS
+    // ═══════════════════════════════════════════════════════════════
     initNotifications() {
         this.updateNotifBadge();
         this._notifPollTimer = setInterval(() => this.updateNotifBadge(), 30000);
@@ -3260,6 +3339,9 @@ const App = {
         } catch (e) { this.toast('Error', 'error'); }
     },
 
+    // ═══════════════════════════════════════════════════════════════
+    // ACTIVITY LOG
+    // ═══════════════════════════════════════════════════════════════
     async showActivityPanel() {
         if (!this.isAdmin()) { this.toast('Admin access required', 'error'); return; }
         try {
@@ -3408,6 +3490,9 @@ const App = {
         } catch (e) { /* silent */ }
     },
 
+    // ═══════════════════════════════════════════════════════════════
+    // TRASH MANAGEMENT
+    // ═══════════════════════════════════════════════════════════════
     async showTrashPanel() {
         if (!this.isAdmin()) { this.toast('Admin access required', 'error'); return; }
         try {
@@ -3543,6 +3628,9 @@ const App = {
         } catch (e) { this.toast('Error: ' + e.message, 'error'); }
     },
 
+    // ═══════════════════════════════════════════════════════════════
+    // DEEP SEARCH
+    // ═══════════════════════════════════════════════════════════════
     showDeepSearchModal() {
         const existing = document.getElementById('deepSearchOverlay');
         if (existing) { existing.remove(); return; }
@@ -3638,6 +3726,9 @@ const App = {
         });
     },
 
+    // ═══════════════════════════════════════════════════════════════
+    // FILE SHARING
+    // ═══════════════════════════════════════════════════════════════
     async showShareModal(filePath, fileName) {
         const existing = document.getElementById('sharePanelOverlay');
         if (existing) existing.remove();
@@ -3769,7 +3860,9 @@ const App = {
         } catch (e) { this.toast('Error: ' + e.message, 'error'); }
     },
 
-    // === Settings Panel (Admin) ===
+    // ═══════════════════════════════════════════════════════════════
+    // SYSTEM SETTINGS
+    // ═══════════════════════════════════════════════════════════════
     async showSettingsPanel() {
         if (!this.isAdmin()) return;
 
@@ -3938,7 +4031,9 @@ const App = {
         }
     },
 
-    // === Helpers ===
+    // ═══════════════════════════════════════════════════════════════
+    // UTILITY HELPERS
+    // ═══════════════════════════════════════════════════════════════
     isEditable(ext) {
         return FILE_TYPES.editable.includes(ext);
     },
@@ -4007,7 +4102,9 @@ const App = {
         }, 3500);
     },
 
-    // === Markdown Renderer ===
+    // ═══════════════════════════════════════════════════════════════
+    // MARKDOWN RENDERER
+    // ═══════════════════════════════════════════════════════════════
     renderMarkdown(text) {
         if (!text) return '';
         let html = text;
@@ -4086,4 +4183,7 @@ const App = {
     }
 };
 
+// ═══════════════════════════════════════════════════════════════
+// BOOTSTRAP
+// ═══════════════════════════════════════════════════════════════
 document.addEventListener('DOMContentLoaded', () => App.init());
