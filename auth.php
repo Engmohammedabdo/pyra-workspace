@@ -7,7 +7,14 @@
 if (session_status() === PHP_SESSION_NONE) {
     ini_set('session.cookie_httponly', 1);
     ini_set('session.cookie_samesite', 'Strict');
+    ini_set('session.cookie_secure', isset($_SERVER['HTTPS']) ? 1 : 0);
+    ini_set('session.use_strict_mode', 1);
+    ini_set('session.gc_maxlifetime', 28800);
     session_start();
+    // CSRF token
+    if (empty($_SESSION['csrf_token'])) {
+        $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
+    }
 }
 
 // === Database (Supabase REST API) ===
@@ -155,23 +162,45 @@ function deleteUser(string $username): array {
 // === Authentication ===
 
 function attemptLogin(string $username, string $password): array {
+    $ip = $_SERVER['REMOTE_ADDR'] ?? '';
+
+    // Check account lockout
+    $lockout = isAccountLocked($username);
+    if ($lockout['locked']) {
+        return ['success' => false, 'error' => 'Account temporarily locked. Try again in ' . $lockout['remaining_minutes'] . ' minute(s).', 'locked' => true];
+    }
+
     $user = findUser($username);
     if (!$user) {
+        recordLoginAttempt($username, $ip, false);
         return ['success' => false, 'error' => 'Invalid credentials'];
     }
     if (!password_verify($password, $user['password_hash'])) {
+        recordLoginAttempt($username, $ip, false);
         return ['success' => false, 'error' => 'Invalid credentials'];
     }
+
+    // Regenerate session ID for security
+    session_regenerate_id(true);
 
     $_SESSION['user'] = $user['username'];
     $_SESSION['role'] = $user['role'];
     $_SESSION['display_name'] = $user['display_name'];
     $_SESSION['permissions'] = $user['permissions'];
+    $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
+
+    // Record successful login and create session
+    recordLoginAttempt($username, $ip, true);
+    createSessionRecord();
 
     return ['success' => true, 'user' => sessionUserInfo()];
 }
 
 function logout(): void {
+    $sessionId = session_id();
+    if ($sessionId) {
+        terminateSession($sessionId);
+    }
     session_unset();
     session_destroy();
 }
@@ -285,8 +314,39 @@ function getEffectivePermissions(string $path): array {
  */
 function hasPathPermission(string $perm, string $path): bool {
     if (isAdmin()) return true;
+
+    // 1. Check user-level effective permissions (includes per_folder_perms)
     $effective = getEffectivePermissions($path);
-    return !empty($effective[$perm]);
+    if (!empty($effective[$perm])) return true;
+
+    // 2. Check team permissions
+    $username = $_SESSION['user'] ?? '';
+    if ($username) {
+        $userTeams = getUserTeams($username);
+        foreach ($userTeams as $team) {
+            $teamPerms = $team['permissions'] ?? [];
+            if (!empty($teamPerms[$perm])) return true;
+            // Also check team per_folder_perms
+            $teamFolderPerms = $teamPerms['per_folder_perms'] ?? [];
+            if (!empty($teamFolderPerms)) {
+                $pathNorm = rtrim($path, '/');
+                foreach ($teamFolderPerms as $folderPath => $folderPerms) {
+                    $folderNorm = rtrim($folderPath, '/');
+                    if ($pathNorm === $folderNorm || ($pathNorm !== '' && strpos($pathNorm . '/', $folderNorm . '/') === 0)) {
+                        if (!empty($folderPerms[$perm])) return true;
+                    }
+                }
+            }
+        }
+    }
+
+    // 3. Check file-level permissions
+    if ($username && $path) {
+        $filePerm = getEffectiveFilePermissions($path, $username);
+        if ($filePerm && !empty($filePerm[$perm])) return true;
+    }
+
+    return false;
 }
 
 function isPathDirectlyAllowed(string $path): bool {
@@ -322,7 +382,8 @@ function addReview(array $data): array {
         'display_name' => $_SESSION['display_name'] ?? $_SESSION['user'],
         'type' => $data['type'],
         'text' => $data['text'] ?? '',
-        'resolved' => false
+        'resolved' => false,
+        'parent_id' => $data['parent_id'] ?? null
     ];
 
     $result = dbRequest('POST', '/pyra_reviews', $review, ['Prefer: return=representation']);
@@ -368,6 +429,296 @@ function updateReviewPaths(string $oldPath, string $newPath): void {
 
 function generateReviewId(): string {
     return 'r_' . time() . '_' . substr(bin2hex(random_bytes(3)), 0, 5);
+}
+
+// === File Versioning ===
+
+function getFileVersions(string $filePath): array {
+    $result = dbRequest('GET', '/pyra_file_versions?file_path=eq.' . rawurlencode($filePath) . '&order=created_at.desc');
+    if ($result['httpCode'] === 200 && is_array($result['data'])) {
+        return $result['data'];
+    }
+    return [];
+}
+
+function createFileVersionRecord(array $data): array {
+    $record = [
+        'id' => 'ver_' . bin2hex(random_bytes(12)),
+        'file_path' => $data['file_path'],
+        'version_path' => $data['version_path'],
+        'version_number' => $data['version_number'] ?? 1,
+        'file_size' => $data['file_size'] ?? 0,
+        'mime_type' => $data['mime_type'] ?? '',
+        'created_by' => $_SESSION['user'] ?? 'system',
+        'created_by_display' => $_SESSION['display_name'] ?? $_SESSION['user'] ?? 'System',
+        'comment' => $data['comment'] ?? ''
+    ];
+    $result = dbRequest('POST', '/pyra_file_versions', $record, ['Prefer: return=representation']);
+    if ($result['httpCode'] === 201) {
+        return ['success' => true, 'version' => is_array($result['data']) && count($result['data']) > 0 ? $result['data'][0] : $record];
+    }
+    return ['success' => false, 'error' => $result['data']['message'] ?? 'Failed to create version record'];
+}
+
+function deleteFileVersionRecord(string $id): array {
+    $result = dbRequest('DELETE', '/pyra_file_versions?id=eq.' . rawurlencode($id));
+    if ($result['httpCode'] === 200 || $result['httpCode'] === 204) {
+        return ['success' => true];
+    }
+    return ['success' => false, 'error' => 'Failed to delete version record'];
+}
+
+function getNextVersionNumber(string $filePath): int {
+    $result = dbRequest('GET', '/pyra_file_versions?file_path=eq.' . rawurlencode($filePath) . '&order=version_number.desc&limit=1');
+    if ($result['httpCode'] === 200 && is_array($result['data']) && count($result['data']) > 0) {
+        return (int)$result['data'][0]['version_number'] + 1;
+    }
+    return 1;
+}
+
+// === File Search Index ===
+
+function indexFile(array $fileData): void {
+    $id = 'fi_' . bin2hex(random_bytes(12));
+    $filePath = $fileData['file_path'];
+    $fileName = basename($filePath);
+    $folderPath = dirname($filePath);
+    if ($folderPath === '.') $folderPath = '';
+
+    $record = [
+        'id' => $id,
+        'file_path' => $filePath,
+        'file_name' => $fileName,
+        'file_name_lower' => strtolower($fileName),
+        'folder_path' => $folderPath,
+        'file_size' => $fileData['file_size'] ?? 0,
+        'mime_type' => $fileData['mime_type'] ?? '',
+        'updated_at' => date('c')
+    ];
+
+    // Try update first, then insert (upsert)
+    $existing = dbRequest('GET', '/pyra_file_index?file_path=eq.' . rawurlencode($filePath) . '&limit=1');
+    if ($existing['httpCode'] === 200 && is_array($existing['data']) && count($existing['data']) > 0) {
+        unset($record['id']);
+        dbRequest('PATCH', '/pyra_file_index?file_path=eq.' . rawurlencode($filePath), $record);
+    } else {
+        dbRequest('POST', '/pyra_file_index', $record);
+    }
+}
+
+function removeFileIndex(string $filePath): void {
+    dbRequest('DELETE', '/pyra_file_index?file_path=eq.' . rawurlencode($filePath));
+}
+
+function updateFileIndexPath(string $oldPath, string $newPath): void {
+    $fileName = basename($newPath);
+    $folderPath = dirname($newPath);
+    if ($folderPath === '.') $folderPath = '';
+    dbRequest('PATCH', '/pyra_file_index?file_path=eq.' . rawurlencode($oldPath), [
+        'file_path' => $newPath,
+        'file_name' => $fileName,
+        'file_name_lower' => strtolower($fileName),
+        'folder_path' => $folderPath,
+        'updated_at' => date('c')
+    ]);
+}
+
+function searchFileIndex(string $query, ?array $allowedPaths = null, int $limit = 200): array {
+    $queryLower = strtolower(trim($query));
+    $filter = 'file_name_lower=ilike.*' . rawurlencode($queryLower) . '*&limit=' . $limit . '&order=updated_at.desc';
+    $result = dbRequest('GET', '/pyra_file_index?' . $filter);
+    if ($result['httpCode'] !== 200 || !is_array($result['data'])) return [];
+
+    $files = $result['data'];
+
+    // Filter by allowed paths if not admin
+    if ($allowedPaths !== null && !in_array('*', $allowedPaths)) {
+        $files = array_filter($files, function($f) use ($allowedPaths) {
+            $path = $f['file_path'];
+            foreach ($allowedPaths as $prefix) {
+                $prefixNorm = rtrim($prefix, '/');
+                $pathDir = dirname($path);
+                if ($pathDir === '.') $pathDir = '';
+                if ($prefixNorm === '' || $prefixNorm === $pathDir || strpos($pathDir . '/', $prefixNorm . '/') === 0) {
+                    return true;
+                }
+            }
+            return false;
+        });
+        $files = array_values($files);
+    }
+
+    return array_map(function($f) {
+        return [
+            'name' => $f['file_name'],
+            'path' => $f['file_path'],
+            'size' => (int)$f['file_size'],
+            'mimetype' => $f['mime_type'],
+            'updated_at' => $f['updated_at']
+        ];
+    }, $files);
+}
+
+// === System Settings ===
+
+function getSettings(): array {
+    if (isset($_SESSION['_settings_cache'])) {
+        return $_SESSION['_settings_cache'];
+    }
+    $result = dbRequest('GET', '/pyra_settings?order=key.asc');
+    $settings = [];
+    if ($result['httpCode'] === 200 && is_array($result['data'])) {
+        foreach ($result['data'] as $row) {
+            $settings[$row['key']] = $row['value'];
+        }
+    }
+    $_SESSION['_settings_cache'] = $settings;
+    return $settings;
+}
+
+function getSetting(string $key, string $default = ''): string {
+    $settings = getSettings();
+    return $settings[$key] ?? $default;
+}
+
+function updateSetting(string $key, string $value): bool {
+    $result = dbRequest('PATCH', '/pyra_settings?key=eq.' . rawurlencode($key), [
+        'value' => $value,
+        'updated_by' => $_SESSION['user'] ?? '',
+        'updated_at' => date('c')
+    ]);
+    if ($result['httpCode'] === 200 || $result['httpCode'] === 204) {
+        unset($_SESSION['_settings_cache']);
+        return true;
+    }
+    // If not found, try insert
+    $result = dbRequest('POST', '/pyra_settings', [
+        'key' => $key,
+        'value' => $value,
+        'updated_by' => $_SESSION['user'] ?? '',
+        'updated_at' => date('c')
+    ]);
+    if ($result['httpCode'] === 201) {
+        unset($_SESSION['_settings_cache']);
+        return true;
+    }
+    return false;
+}
+
+function getPublicSettings(): array {
+    $result = dbRequest('GET', '/pyra_settings?key=in.(app_name,app_logo_url,primary_color)');
+    $settings = [
+        'app_name' => 'Pyra Workspace',
+        'app_logo_url' => '',
+        'primary_color' => '#8b5cf6'
+    ];
+    if ($result['httpCode'] === 200 && is_array($result['data'])) {
+        foreach ($result['data'] as $row) {
+            $settings[$row['key']] = $row['value'];
+        }
+    }
+    return $settings;
+}
+
+// === Session Management & Security ===
+
+function recordLoginAttempt(string $username, string $ip, bool $success): void {
+    dbRequest('POST', '/pyra_login_attempts', [
+        'username' => $username,
+        'ip_address' => $ip,
+        'success' => $success
+    ]);
+}
+
+function isAccountLocked(string $username): array {
+    $maxFailed = (int)getSetting('max_failed_logins', '5');
+    $lockoutMinutes = (int)getSetting('lockout_duration_minutes', '15');
+    $since = date('c', time() - ($lockoutMinutes * 60));
+
+    $result = dbRequest('GET', '/pyra_login_attempts?username=eq.' . rawurlencode($username)
+        . '&success=eq.false&attempted_at=gte.' . rawurlencode($since)
+        . '&order=attempted_at.desc&limit=' . $maxFailed);
+
+    if ($result['httpCode'] === 200 && is_array($result['data']) && count($result['data']) >= $maxFailed) {
+        $lastAttempt = strtotime($result['data'][0]['attempted_at']);
+        $unlockAt = $lastAttempt + ($lockoutMinutes * 60);
+        $remainingSec = $unlockAt - time();
+        if ($remainingSec > 0) {
+            return ['locked' => true, 'remaining_seconds' => $remainingSec, 'remaining_minutes' => ceil($remainingSec / 60)];
+        }
+    }
+    return ['locked' => false];
+}
+
+function createSessionRecord(): void {
+    $sessionId = session_id();
+    if (!$sessionId) return;
+    $username = $_SESSION['user'] ?? '';
+    if (!$username) return;
+
+    dbRequest('POST', '/pyra_sessions', [
+        'id' => $sessionId,
+        'username' => $username,
+        'ip_address' => $_SERVER['REMOTE_ADDR'] ?? '',
+        'user_agent' => substr($_SERVER['HTTP_USER_AGENT'] ?? '', 0, 500),
+        'last_activity' => date('c')
+    ]);
+}
+
+function trackSession(): void {
+    $sessionId = session_id();
+    if (!$sessionId || !isLoggedIn()) return;
+
+    // Update last_activity every 5 minutes to avoid excessive DB writes
+    $lastTrack = $_SESSION['_last_track'] ?? 0;
+    if (time() - $lastTrack < 300) return;
+
+    dbRequest('PATCH', '/pyra_sessions?id=eq.' . rawurlencode($sessionId), [
+        'last_activity' => date('c')
+    ]);
+    $_SESSION['_last_track'] = time();
+}
+
+function getUserSessions(string $username): array {
+    $result = dbRequest('GET', '/pyra_sessions?username=eq.' . rawurlencode($username) . '&order=last_activity.desc');
+    if ($result['httpCode'] === 200 && is_array($result['data'])) {
+        return $result['data'];
+    }
+    return [];
+}
+
+function terminateSession(string $sessionId): bool {
+    $result = dbRequest('DELETE', '/pyra_sessions?id=eq.' . rawurlencode($sessionId));
+    return ($result['httpCode'] === 200 || $result['httpCode'] === 204);
+}
+
+function terminateAllSessions(string $username, ?string $exceptSessionId = null): int {
+    $filter = 'username=eq.' . rawurlencode($username);
+    if ($exceptSessionId) {
+        $filter .= '&id=neq.' . rawurlencode($exceptSessionId);
+    }
+    $result = dbRequest('DELETE', '/pyra_sessions?' . $filter);
+    return ($result['httpCode'] === 200 || $result['httpCode'] === 204) ? 1 : 0;
+}
+
+function generateCsrfToken(): string {
+    if (empty($_SESSION['csrf_token'])) {
+        $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
+    }
+    return $_SESSION['csrf_token'];
+}
+
+function validateCsrfToken(string $token): bool {
+    if (empty($_SESSION['csrf_token'])) return false;
+    return hash_equals($_SESSION['csrf_token'], $token);
+}
+
+function getLoginHistory(int $limit = 50): array {
+    $result = dbRequest('GET', '/pyra_login_attempts?order=attempted_at.desc&limit=' . $limit);
+    if ($result['httpCode'] === 200 && is_array($result['data'])) {
+        return $result['data'];
+    }
+    return [];
 }
 
 // === Activity Log ===
