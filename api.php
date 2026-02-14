@@ -130,8 +130,94 @@ function listFiles(string $prefix = ''): array {
     return ['success' => false, 'error' => $result['data']['message'] ?? 'Failed to list files'];
 }
 
+function createFileVersion(string $filePath): bool {
+    // Check if file exists in storage
+    $encodedPath = implode('/', array_map('rawurlencode', explode('/', $filePath)));
+    $checkUrl = SUPABASE_URL . '/storage/v1/object/' . SUPABASE_BUCKET . '/' . $encodedPath;
+
+    $ch = curl_init();
+    curl_setopt($ch, CURLOPT_URL, $checkUrl);
+    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+    curl_setopt($ch, CURLOPT_NOBODY, false);
+    curl_setopt($ch, CURLOPT_HTTPHEADER, [
+        'Authorization: Bearer ' . SUPABASE_SERVICE_KEY,
+    ]);
+    curl_setopt($ch, CURLOPT_TIMEOUT, 60);
+    $fileContent = curl_exec($ch);
+    $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    $contentType = curl_getinfo($ch, CURLINFO_CONTENT_TYPE);
+    curl_close($ch);
+
+    if ($httpCode !== 200 || empty($fileContent)) return false;
+
+    // Check max versions setting
+    $maxVersions = (int)getSetting('max_versions_per_file', '10');
+    $existingVersions = getFileVersions($filePath);
+
+    // If at max, delete oldest
+    if (count($existingVersions) >= $maxVersions && $maxVersions > 0) {
+        $oldest = end($existingVersions);
+        if ($oldest) {
+            // Delete from storage
+            $oldEncodedPath = implode('/', array_map('rawurlencode', explode('/', $oldest['version_path'])));
+            $delUrl = SUPABASE_URL . '/storage/v1/object/' . SUPABASE_BUCKET . '/' . $oldEncodedPath;
+            $ch = curl_init();
+            curl_setopt($ch, CURLOPT_URL, $delUrl);
+            curl_setopt($ch, CURLOPT_CUSTOMREQUEST, 'DELETE');
+            curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+            curl_setopt($ch, CURLOPT_HTTPHEADER, ['Authorization: Bearer ' . SUPABASE_SERVICE_KEY]);
+            curl_exec($ch);
+            curl_close($ch);
+            deleteFileVersionRecord($oldest['id']);
+        }
+    }
+
+    // Copy to .versions/
+    $timestamp = date('Ymd_His');
+    $fileName = basename($filePath);
+    $versionPath = '.versions/' . $filePath . '/' . $timestamp . '_' . $fileName;
+
+    $versionEncodedPath = implode('/', array_map('rawurlencode', explode('/', $versionPath)));
+    $uploadUrl = SUPABASE_URL . '/storage/v1/object/' . SUPABASE_BUCKET . '/' . $versionEncodedPath;
+
+    $ch = curl_init();
+    curl_setopt($ch, CURLOPT_URL, $uploadUrl);
+    curl_setopt($ch, CURLOPT_POST, true);
+    curl_setopt($ch, CURLOPT_POSTFIELDS, $fileContent);
+    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+    curl_setopt($ch, CURLOPT_TIMEOUT, 120);
+    curl_setopt($ch, CURLOPT_HTTPHEADER, [
+        'Authorization: Bearer ' . SUPABASE_SERVICE_KEY,
+        'Content-Type: ' . ($contentType ?: 'application/octet-stream'),
+        'x-upsert: true'
+    ]);
+    $response = curl_exec($ch);
+    $vHttpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    curl_close($ch);
+
+    if ($vHttpCode === 200 || $vHttpCode === 201) {
+        $versionNum = getNextVersionNumber($filePath);
+        createFileVersionRecord([
+            'file_path' => $filePath,
+            'version_path' => $versionPath,
+            'version_number' => $versionNum,
+            'file_size' => strlen($fileContent),
+            'mime_type' => $contentType ?: 'application/octet-stream'
+        ]);
+        return true;
+    }
+    return false;
+}
+
 function uploadFile(string $prefix, array $file): array {
     $filePath = $prefix ? $prefix . '/' . $file['name'] : $file['name'];
+
+    // Auto-versioning: check if file exists and create version before overwrite
+    $autoVersion = getSetting('auto_version_on_upload', 'true') === 'true';
+    if ($autoVersion) {
+        createFileVersion($filePath);
+    }
+
     $endpoint = '/object/' . SUPABASE_BUCKET . '/' . rawurlencode($filePath);
 
     $finfo = finfo_open(FILEINFO_MIME_TYPE);
@@ -166,6 +252,12 @@ function uploadFile(string $prefix, array $file): array {
     }
 
     if ($httpCode === 200 || $httpCode === 201) {
+        // Update file search index
+        indexFile([
+            'file_path' => $filePath,
+            'file_size' => strlen($fileContent),
+            'mime_type' => $mimeType
+        ]);
         return ['success' => true, 'path' => $filePath];
     }
 
@@ -190,6 +282,7 @@ function deleteFile(string $filePath): array {
     curl_close($ch);
 
     if ($httpCode === 200) {
+        removeFileIndex($filePath);
         return ['success' => true];
     }
 
@@ -216,6 +309,7 @@ function moveToTrash(string $filePath, int $fileSize = 0, string $mimeType = 'ap
             'file_size' => $fileSize,
             'mime_type' => $mimeType
         ]);
+        removeFileIndex($filePath);
         return ['success' => true];
     }
     return ['success' => false, 'error' => $result['data']['message'] ?? 'Failed to move to trash'];
@@ -232,6 +326,7 @@ function renameFile(string $oldPath, string $newPath): array {
 
     if ($result['httpCode'] === 200) {
         updateReviewPaths($oldPath, $newPath);
+        updateFileIndexPath($oldPath, $newPath);
         return ['success' => true];
     }
 
@@ -377,8 +472,24 @@ if (!is_array($jsonBody)) $jsonBody = [];
 
 $action = $_GET['action'] ?? $_POST['action'] ?? ($jsonBody['action'] ?? '');
 
+// CSRF protection for state-changing requests
+if ($_SERVER['REQUEST_METHOD'] !== 'GET' && $action !== 'login' && $action !== 'getPublicSettings') {
+    if (isLoggedIn()) {
+        $csrfToken = $_SERVER['HTTP_X_CSRF_TOKEN'] ?? $jsonBody['_csrf'] ?? '';
+        if (!validateCsrfToken($csrfToken)) {
+            echo json_encode(['success' => false, 'error' => 'Invalid security token. Please refresh the page.']);
+            exit;
+        }
+    }
+}
+
+// Track session activity
+if (isLoggedIn()) {
+    trackSession();
+}
+
 // Actions that don't require authentication
-$publicActions = ['login', 'logout', 'session', 'shareAccess'];
+$publicActions = ['login', 'logout', 'session', 'shareAccess', 'getPublicSettings'];
 
 if (!in_array($action, $publicActions)) {
     requireAuth();
@@ -422,7 +533,7 @@ switch ($action) {
 
     case 'list':
         $prefix = sanitizePath($_GET['prefix'] ?? '');
-        if (!canAccessPath($prefix)) {
+        if (!canAccessPathEnhanced($prefix)) {
             echo json_encode(['success' => false, 'error' => 'Access denied']);
             break;
         }
@@ -438,7 +549,7 @@ switch ($action) {
             // Filter for non-admin users
             if (!isAdmin()) {
                 $result['folders'] = array_values(array_filter($result['folders'], function($f) {
-                    return canAccessPath($f['path']);
+                    return canAccessPathEnhanced($f['path']);
                 }));
                 $result['files'] = array_values(array_filter($result['files'], function($f) {
                     return isPathDirectlyAllowed($f['path']);
@@ -454,7 +565,7 @@ switch ($action) {
             break;
         }
         $prefix = sanitizePath($_POST['prefix'] ?? '');
-        if (!canAccessPath($prefix)) {
+        if (!canAccessPathEnhanced($prefix)) {
             echo json_encode(['success' => false, 'error' => 'Access denied to this path']);
             break;
         }
@@ -505,7 +616,7 @@ switch ($action) {
             echo json_encode(['success' => false, 'error' => 'No path provided']);
             break;
         }
-        if (!canAccessPath($path)) {
+        if (!canAccessPathEnhanced($path)) {
             echo json_encode(['success' => false, 'error' => 'Access denied']);
             break;
         }
@@ -527,7 +638,7 @@ switch ($action) {
             echo json_encode(['success' => false, 'error' => 'Paths required']);
             break;
         }
-        if (!canAccessPath($oldPath) || !canAccessPath($newPath)) {
+        if (!canAccessPathEnhanced($oldPath) || !canAccessPathEnhanced($newPath)) {
             echo json_encode(['success' => false, 'error' => 'Access denied']);
             break;
         }
@@ -548,7 +659,7 @@ switch ($action) {
             echo json_encode(['success' => false, 'error' => 'No path provided']);
             break;
         }
-        if (!canAccessPath($path)) {
+        if (!canAccessPathEnhanced($path)) {
             echo json_encode(['success' => false, 'error' => 'Access denied']);
             break;
         }
@@ -568,7 +679,7 @@ switch ($action) {
             echo json_encode(['success' => false, 'error' => 'No path provided']);
             break;
         }
-        if (!canAccessPath($path)) {
+        if (!canAccessPathEnhanced($path)) {
             echo json_encode(['success' => false, 'error' => 'Access denied']);
             break;
         }
@@ -576,6 +687,7 @@ switch ($action) {
             echo json_encode(['success' => false, 'error' => 'Edit not permitted for this folder']);
             break;
         }
+        createFileVersion($path);
         $result = saveFileContent($path, $content, $mimeType);
         if ($result['success']) {
             logActivity('save_file', $path);
@@ -590,7 +702,7 @@ switch ($action) {
             echo json_encode(['success' => false, 'error' => 'Folder name required']);
             break;
         }
-        if (!canAccessPath($prefix)) {
+        if (!canAccessPathEnhanced($prefix)) {
             echo json_encode(['success' => false, 'error' => 'Access denied']);
             break;
         }
@@ -612,7 +724,7 @@ switch ($action) {
             echo 'No path provided';
             break;
         }
-        if (!canAccessPath($path)) {
+        if (!canAccessPathEnhanced($path)) {
             http_response_code(403);
             echo 'Access denied';
             exit;
@@ -644,7 +756,7 @@ switch ($action) {
             echo 'No path provided';
             break;
         }
-        if (!canAccessPath($path)) {
+        if (!canAccessPathEnhanced($path)) {
             http_response_code(403);
             echo 'Access denied';
             exit;
@@ -671,7 +783,7 @@ switch ($action) {
 
     case 'publicUrl':
         $path = sanitizePath($_GET['path'] ?? '');
-        if (!canAccessPath($path)) {
+        if (!canAccessPathEnhanced($path)) {
             echo json_encode(['success' => false, 'error' => 'Access denied']);
             break;
         }
@@ -687,7 +799,7 @@ switch ($action) {
         $results = [];
         foreach ($paths as $p) {
             $safePath = sanitizePath($p);
-            if ($safePath && canAccessPath($safePath) && hasPathPermission('can_delete', $safePath)) {
+            if ($safePath && canAccessPathEnhanced($safePath) && hasPathPermission('can_delete', $safePath)) {
                 $trashResult = moveToTrash($safePath);
                 if ($trashResult['success']) {
                     logActivity('delete', $safePath, ['moved_to_trash' => true, 'batch' => true]);
@@ -702,7 +814,7 @@ switch ($action) {
 
     case 'getReviews':
         $path = sanitizePath($_GET['path'] ?? '');
-        if (!$path || !canAccessPath($path)) {
+        if (!$path || !canAccessPathEnhanced($path)) {
             echo json_encode(['success' => false, 'error' => 'Access denied']);
             break;
         }
@@ -715,8 +827,9 @@ switch ($action) {
         $path = sanitizePath($input['path'] ?? '');
         $type = $input['type'] ?? 'comment';
         $text = trim($input['text'] ?? '');
+        $parentId = $input['parent_id'] ?? null;
 
-        if (!$path || !canAccessPath($path)) {
+        if (!$path || !canAccessPathEnhanced($path)) {
             echo json_encode(['success' => false, 'error' => 'Access denied']);
             break;
         }
@@ -733,10 +846,21 @@ switch ($action) {
             break;
         }
 
-        $result = addReview(['file_path' => $path, 'type' => $type, 'text' => $text]);
+        $result = addReview(['file_path' => $path, 'type' => $type, 'text' => $text, 'parent_id' => $parentId]);
         if ($result['success']) {
             logActivity('review_added', $path, ['type' => $type]);
             $fileName = basename($path);
+
+            if ($parentId) {
+                // Get parent review to find author
+                $parentReview = dbRequest('GET', '/pyra_reviews?id=eq.' . rawurlencode($parentId) . '&limit=1');
+                if ($parentReview['httpCode'] === 200 && !empty($parentReview['data'])) {
+                    $parentAuthor = $parentReview['data'][0]['username'];
+                    $displayName = $_SESSION['display_name'] ?? $_SESSION['user'];
+                    createNotification($parentAuthor, 'reply', $displayName . ' replied to your comment on ' . $fileName, $text, $path);
+                }
+            }
+
             $notifTitle = $type === 'approval' ? 'File approved: ' . $fileName : 'New comment on ' . $fileName;
             $usersWithAccess = findUsersWithPathAccess(dirname($path));
             foreach ($usersWithAccess as $recipient) {
@@ -811,6 +935,7 @@ switch ($action) {
         ]);
         if ($moveResult['httpCode'] === 200) {
             deleteTrashRecord($trashId);
+            indexFile(['file_path' => $trashRecord['original_path'], 'file_size' => 0, 'mime_type' => '']);
             logActivity('trash_restore', $trashRecord['original_path'], ['file_name' => $trashRecord['file_name']]);
             echo json_encode(['success' => true]);
         } else {
@@ -926,22 +1051,31 @@ switch ($action) {
             break;
         }
 
-        $allFiles = recursiveListFiles('');
-        $queryLower = strtolower($query);
-
-        $matched = array_filter($allFiles, function($file) use ($queryLower) {
-            return strpos(strtolower($file['name']), $queryLower) !== false
-                || strpos(strtolower($file['path']), $queryLower) !== false;
-        });
-
+        // Use file index for fast search
+        $allowedPaths = null;
         if (!isAdmin()) {
-            $matched = array_filter($matched, function($file) {
-                return isPathDirectlyAllowed($file['path']);
-            });
+            $perms = $_SESSION['permissions'] ?? [];
+            $allowedPaths = $perms['allowed_paths'] ?? [];
         }
 
-        $matched = array_values($matched);
-        $matched = array_slice($matched, 0, 200);
+        $matched = searchFileIndex($query, $allowedPaths);
+
+        // Fallback to recursive if index is empty (not yet built)
+        if (empty($matched)) {
+            $allFiles = recursiveListFiles('');
+            $queryLower = strtolower($query);
+            $matched = array_filter($allFiles, function($file) use ($queryLower) {
+                return strpos(strtolower($file['name']), $queryLower) !== false
+                    || strpos(strtolower($file['path']), $queryLower) !== false;
+            });
+            if (!isAdmin()) {
+                $matched = array_filter($matched, function($file) {
+                    return isPathDirectlyAllowed($file['path']);
+                });
+            }
+            $matched = array_values($matched);
+            $matched = array_slice($matched, 0, 200);
+        }
 
         echo json_encode(['success' => true, 'results' => $matched, 'total' => count($matched)]);
         break;
@@ -958,7 +1092,7 @@ switch ($action) {
             echo json_encode(['success' => false, 'error' => 'Path required']);
             break;
         }
-        if (!canAccessPath($path)) {
+        if (!canAccessPathEnhanced($path)) {
             echo json_encode(['success' => false, 'error' => 'Access denied']);
             break;
         }
@@ -979,7 +1113,7 @@ switch ($action) {
 
     case 'getShareLinks':
         $path = sanitizePath($_GET['path'] ?? '');
-        if (!$path || !canAccessPath($path)) {
+        if (!$path || !canAccessPathEnhanced($path)) {
             echo json_encode(['success' => false, 'error' => 'Access denied']);
             break;
         }
@@ -1343,6 +1477,314 @@ switch ($action) {
         }
         $count = cleanExpiredFilePermissions();
         echo json_encode(['success' => true, 'cleaned' => $count]);
+        break;
+
+    // === Dashboard ===
+    case 'getDashboard':
+        requireAuth();
+        $role = $_SESSION['role'] ?? 'client';
+        $dashData = ['role' => $role];
+
+        if ($role === 'admin') {
+            // User count
+            $usersResult = dbRequest('GET', '/pyra_users?select=id&limit=1000');
+            $dashData['user_count'] = ($usersResult['httpCode'] === 200 && is_array($usersResult['data'])) ? count($usersResult['data']) : 0;
+
+            // Recent activity
+            $actResult = dbRequest('GET', '/pyra_activity_log?order=created_at.desc&limit=10');
+            $dashData['recent_activity'] = ($actResult['httpCode'] === 200 && is_array($actResult['data'])) ? $actResult['data'] : [];
+
+            // Pending reviews count
+            $revResult = dbRequest('GET', '/pyra_reviews?resolved=eq.false&select=id&limit=1000');
+            $dashData['pending_reviews'] = ($revResult['httpCode'] === 200 && is_array($revResult['data'])) ? count($revResult['data']) : 0;
+
+            // File count from index
+            $fileResult = dbRequest('GET', '/pyra_file_index?select=id&limit=10000');
+            $dashData['file_count'] = ($fileResult['httpCode'] === 200 && is_array($fileResult['data'])) ? count($fileResult['data']) : 0;
+
+        } elseif ($role === 'employee') {
+            $perms = $_SESSION['permissions'] ?? [];
+            $allowedPaths = $perms['allowed_paths'] ?? ['*'];
+            $dashData['my_folders'] = $allowedPaths;
+
+            // My reviews
+            $username = $_SESSION['user'];
+            $revResult = dbRequest('GET', '/pyra_reviews?username=eq.' . rawurlencode($username) . '&order=created_at.desc&limit=10');
+            $dashData['my_reviews'] = ($revResult['httpCode'] === 200 && is_array($revResult['data'])) ? $revResult['data'] : [];
+
+            // Recent activity in my folders
+            $actResult = dbRequest('GET', '/pyra_activity_log?order=created_at.desc&limit=10');
+            $dashData['recent_activity'] = ($actResult['httpCode'] === 200 && is_array($actResult['data'])) ? $actResult['data'] : [];
+
+            // Notification count
+            $notifResult = dbRequest('GET', '/pyra_notifications?recipient_username=eq.' . rawurlencode($username) . '&is_read=eq.false&select=id&limit=100');
+            $dashData['unread_notif_count'] = ($notifResult['httpCode'] === 200 && is_array($notifResult['data'])) ? count($notifResult['data']) : 0;
+
+        } else { // client
+            $perms = $_SESSION['permissions'] ?? [];
+            $allowedPaths = $perms['allowed_paths'] ?? [];
+            $dashData['my_folders'] = $allowedPaths;
+
+            // Folder stats
+            $folderStats = [];
+            foreach ($allowedPaths as $fp) {
+                if ($fp === '*') continue;
+                $body = ['prefix' => $fp, 'limit' => 1000, 'offset' => 0, 'sortBy' => ['column' => 'name', 'order' => 'asc']];
+                $listResult = supabaseRequest('POST', '/object/list/' . SUPABASE_BUCKET, $body);
+                $count = 0;
+                $lastMod = '';
+                if ($listResult['httpCode'] === 200 && is_array($listResult['data'])) {
+                    foreach ($listResult['data'] as $item) {
+                        if ($item['id'] !== null || $item['metadata'] !== null) {
+                            $count++;
+                            if (!empty($item['updated_at']) && $item['updated_at'] > $lastMod) {
+                                $lastMod = $item['updated_at'];
+                            }
+                        }
+                    }
+                }
+                $folderStats[] = ['path' => $fp, 'file_count' => $count, 'last_modified' => $lastMod];
+            }
+            $dashData['folder_stats'] = $folderStats;
+
+            // My reviews
+            $username = $_SESSION['user'];
+            $revResult = dbRequest('GET', '/pyra_reviews?username=eq.' . rawurlencode($username) . '&order=created_at.desc&limit=10');
+            $dashData['my_reviews'] = ($revResult['httpCode'] === 200 && is_array($revResult['data'])) ? $revResult['data'] : [];
+
+            // Recent activity on my files
+            $actResult = dbRequest('GET', '/pyra_activity_log?order=created_at.desc&limit=10');
+            $activities = ($actResult['httpCode'] === 200 && is_array($actResult['data'])) ? $actResult['data'] : [];
+            // Filter to paths accessible to client
+            $dashData['recent_activity'] = array_values(array_filter($activities, function($a) use ($allowedPaths) {
+                $tp = $a['target_path'] ?? '';
+                foreach ($allowedPaths as $prefix) {
+                    if ($prefix === '*') return true;
+                    if (strpos($tp, rtrim($prefix, '/')) === 0) return true;
+                }
+                return false;
+            }));
+        }
+
+        echo json_encode(['success' => true, 'data' => $dashData]);
+        break;
+
+    // === File Versions ===
+    case 'getFileVersions':
+        requireAuth();
+        $path = sanitizePath($_GET['path'] ?? '');
+        if (!$path || !canAccessPathEnhanced($path)) {
+            echo json_encode(['success' => false, 'error' => 'Access denied']);
+            break;
+        }
+        $versions = getFileVersions($path);
+        echo json_encode(['success' => true, 'versions' => $versions]);
+        break;
+
+    case 'restoreVersion':
+        requireAuth();
+        $input = $jsonBody;
+        $versionId = $input['version_id'] ?? '';
+        if (!$versionId) {
+            echo json_encode(['success' => false, 'error' => 'Version ID required']);
+            break;
+        }
+        // Get version record
+        $verResult = dbRequest('GET', '/pyra_file_versions?id=eq.' . rawurlencode($versionId) . '&limit=1');
+        if ($verResult['httpCode'] !== 200 || empty($verResult['data'])) {
+            echo json_encode(['success' => false, 'error' => 'Version not found']);
+            break;
+        }
+        $ver = $verResult['data'][0];
+        $originalPath = $ver['file_path'];
+        $versionPath = $ver['version_path'];
+
+        if (!canAccessPathEnhanced($originalPath)) {
+            echo json_encode(['success' => false, 'error' => 'Access denied']);
+            break;
+        }
+
+        // Create version of current file before restoring
+        createFileVersion($originalPath);
+
+        // Download version file
+        $vEncodedPath = implode('/', array_map('rawurlencode', explode('/', $versionPath)));
+        $vUrl = SUPABASE_URL . '/storage/v1/object/' . SUPABASE_BUCKET . '/' . $vEncodedPath;
+        $ch = curl_init();
+        curl_setopt($ch, CURLOPT_URL, $vUrl);
+        curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+        curl_setopt($ch, CURLOPT_HTTPHEADER, ['Authorization: Bearer ' . SUPABASE_SERVICE_KEY]);
+        $vContent = curl_exec($ch);
+        $vHttp = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        curl_close($ch);
+
+        if ($vHttp !== 200 || empty($vContent)) {
+            echo json_encode(['success' => false, 'error' => 'Failed to download version file']);
+            break;
+        }
+
+        // Upload to original path
+        $oEncodedPath = implode('/', array_map('rawurlencode', explode('/', $originalPath)));
+        $oUrl = SUPABASE_URL . '/storage/v1/object/' . SUPABASE_BUCKET . '/' . $oEncodedPath;
+        $ch = curl_init();
+        curl_setopt($ch, CURLOPT_URL, $oUrl);
+        curl_setopt($ch, CURLOPT_POST, true);
+        curl_setopt($ch, CURLOPT_POSTFIELDS, $vContent);
+        curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+        curl_setopt($ch, CURLOPT_HTTPHEADER, [
+            'Authorization: Bearer ' . SUPABASE_SERVICE_KEY,
+            'Content-Type: ' . ($ver['mime_type'] ?: 'application/octet-stream'),
+            'x-upsert: true'
+        ]);
+        $response = curl_exec($ch);
+        $rHttp = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        curl_close($ch);
+
+        if ($rHttp === 200 || $rHttp === 201) {
+            logActivity('version_restored', $originalPath, ['version_id' => $versionId, 'version_number' => $ver['version_number']]);
+            echo json_encode(['success' => true]);
+        } else {
+            echo json_encode(['success' => false, 'error' => 'Failed to restore file']);
+        }
+        break;
+
+    case 'deleteVersion':
+        requireAuth();
+        if (!isAdmin()) {
+            echo json_encode(['success' => false, 'error' => 'Admin only']);
+            break;
+        }
+        $input = $jsonBody;
+        $versionId = $input['version_id'] ?? '';
+        if (!$versionId) {
+            echo json_encode(['success' => false, 'error' => 'Version ID required']);
+            break;
+        }
+        $verResult = dbRequest('GET', '/pyra_file_versions?id=eq.' . rawurlencode($versionId) . '&limit=1');
+        if ($verResult['httpCode'] !== 200 || empty($verResult['data'])) {
+            echo json_encode(['success' => false, 'error' => 'Version not found']);
+            break;
+        }
+        $ver = $verResult['data'][0];
+        // Delete version file from storage
+        $vEncodedPath = implode('/', array_map('rawurlencode', explode('/', $ver['version_path'])));
+        $delUrl = SUPABASE_URL . '/storage/v1/object/' . SUPABASE_BUCKET . '/' . $vEncodedPath;
+        $ch = curl_init();
+        curl_setopt($ch, CURLOPT_URL, $delUrl);
+        curl_setopt($ch, CURLOPT_CUSTOMREQUEST, 'DELETE');
+        curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+        curl_setopt($ch, CURLOPT_HTTPHEADER, ['Authorization: Bearer ' . SUPABASE_SERVICE_KEY]);
+        curl_exec($ch);
+        curl_close($ch);
+        // Delete record
+        $delResult = deleteFileVersionRecord($versionId);
+        echo json_encode($delResult);
+        break;
+
+    // === System Settings ===
+    case 'getSettings':
+        requireAuth();
+        if (!isAdmin()) {
+            echo json_encode(['success' => false, 'error' => 'Admin only']);
+            break;
+        }
+        echo json_encode(['success' => true, 'settings' => getSettings()]);
+        break;
+
+    case 'updateSettings':
+        requireAuth();
+        if (!isAdmin()) {
+            echo json_encode(['success' => false, 'error' => 'Admin only']);
+            break;
+        }
+        $input = $jsonBody;
+        $settings = $input['settings'] ?? [];
+        $updated = 0;
+        foreach ($settings as $key => $value) {
+            if (updateSetting($key, (string)$value)) $updated++;
+        }
+        logActivity('settings_updated', '', ['count' => $updated]);
+        echo json_encode(['success' => true, 'updated' => $updated]);
+        break;
+
+    case 'getPublicSettings':
+        echo json_encode(['success' => true, 'settings' => getPublicSettings()]);
+        break;
+
+    // === Session Management ===
+    case 'getSessions':
+        requireAuth();
+        $targetUser = $_GET['username'] ?? $_SESSION['user'];
+        if ($targetUser !== $_SESSION['user'] && !isAdmin()) {
+            echo json_encode(['success' => false, 'error' => 'Access denied']);
+            break;
+        }
+        echo json_encode(['success' => true, 'sessions' => getUserSessions($targetUser)]);
+        break;
+
+    case 'terminateSession':
+        requireAuth();
+        $input = $jsonBody;
+        $targetSessionId = $input['session_id'] ?? '';
+        if (!$targetSessionId) {
+            echo json_encode(['success' => false, 'error' => 'Session ID required']);
+            break;
+        }
+        // Verify ownership or admin
+        if (!isAdmin()) {
+            $sessResult = dbRequest('GET', '/pyra_sessions?id=eq.' . rawurlencode($targetSessionId) . '&limit=1');
+            if ($sessResult['httpCode'] !== 200 || empty($sessResult['data']) || $sessResult['data'][0]['username'] !== $_SESSION['user']) {
+                echo json_encode(['success' => false, 'error' => 'Access denied']);
+                break;
+            }
+        }
+        $success = terminateSession($targetSessionId);
+        echo json_encode(['success' => $success]);
+        break;
+
+    case 'terminateAllSessions':
+        requireAuth();
+        $input = $jsonBody;
+        $targetUser = $input['username'] ?? $_SESSION['user'];
+        if ($targetUser !== $_SESSION['user'] && !isAdmin()) {
+            echo json_encode(['success' => false, 'error' => 'Access denied']);
+            break;
+        }
+        terminateAllSessions($targetUser, session_id());
+        echo json_encode(['success' => true]);
+        break;
+
+    case 'getLoginHistory':
+        requireAuth();
+        if (!isAdmin()) {
+            echo json_encode(['success' => false, 'error' => 'Admin only']);
+            break;
+        }
+        echo json_encode(['success' => true, 'history' => getLoginHistory()]);
+        break;
+
+    // === File Index ===
+    case 'rebuildIndex':
+        requireAuth();
+        if (!isAdmin()) {
+            echo json_encode(['success' => false, 'error' => 'Admin only']);
+            break;
+        }
+        // Clear existing index
+        dbRequest('DELETE', '/pyra_file_index?id=neq.none');
+        // Walk entire storage
+        $allFiles = recursiveListFiles('');
+        $indexed = 0;
+        foreach ($allFiles as $f) {
+            indexFile([
+                'file_path' => $f['path'],
+                'file_size' => $f['size'] ?? 0,
+                'mime_type' => $f['mimetype'] ?? ''
+            ]);
+            $indexed++;
+        }
+        logActivity('index_rebuilt', '', ['file_count' => $indexed]);
+        echo json_encode(['success' => true, 'indexed' => $indexed]);
         break;
 
     default:
